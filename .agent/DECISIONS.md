@@ -86,6 +86,28 @@ Gemini 3.x rejects (400) a function-call turn echoed back without its `thought_s
 `_to_result`, re-attached in `_to_genai_contents`). It is bytes, not a genai type, so the
 boundary holds. Any future manual conversation replay must preserve it.
 
+## D-020 · 2026-07-12 · Imported-from-private-source domains are gitignored
+The retail corpus source (`Knowledge_Research-main/`) is private (user: don't push). Import COPIES
+it into `library/domains/retail/`, and `library/` markdown is normally git-tracked (D-002) — so the
+imported copy would leak the private content to GitHub. Fix: `.gitignore` excludes
+`/library/domains/retail/`; the publishable AI seed (`library/domains/ai/`) stays tracked. General
+rule: content imported from a gitignored source stays local. If a corpus is meant to be shared,
+un-ignore its domain deliberately.
+Caveat found: `store.recompute_stats` rewrites `updated_at` on every node each run → churns all
+tracked `library/**/_meta.json` in git. For now, don't commit that churn (revert `library/` after
+a local import). Future fix: only rewrite `_meta.json` when its content actually changed.
+
+## D-019 · 2026-07-12 · Ingest is one pipeline that fills missing structural slots (docs/INGEST.md)
+Reframed from "several ingest paths" to ONE pipeline: survey → DraftTree(provided/missing) →
+resolve gaps → commit. The rulebase defines the 5 slots (domain▸shelf▸book▸toc▸page); the AI only
+fills what a source doesn't already provide, so a clean folder imports ~deterministically (AI touches
+only the shelf slot) while a raw PDF leans on the AI + confidence gate. `import` (folders) and
+`ingest` (documents) are two entry points into the same pipeline. Import COPIES content into the
+canonical `library/` store (not in-place); page body = source prose with YAML frontmatter stripped
+(title/description/keywords lifted into TOC + page frontmatter). Shelf slot is always missing
+(VALID_CHILD[domain]={shelf}) → strategies single/by-priority/auto-LLM. Supersedes the flat ingest
+plan in FUNCTIONS.md §8. Delivery split P2a (import) / P2b (doc ingest) / P2c (flywheel+catalog).
+
 ## D-018 · 2026-07-11 · Query streaming = SSE over POST, walk on a worker thread
 `POST /api/query` returns `text/event-stream`. The orchestrator is synchronous/blocking (LLM
 calls), so the route runs it on a `threading.Thread` and bridges NavEvents to the async

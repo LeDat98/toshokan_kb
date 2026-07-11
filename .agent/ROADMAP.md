@@ -22,13 +22,20 @@ Phase details and rationale: `docs/ARCHITECTURE.md` §8. Function specs: `docs/F
   via the vite proxy. 39 unit tests green; frontend builds clean.
 - [~] Note: token-level answer streaming deferred (answer arrives as one SSE event after the walk)
 
-## P2 — Ingest + flywheel
-- [ ] `ingest/parse.py` (md, pdf, url) · `split.py` (structure-aware)
-- [ ] `ingest/classify.py` + confidence gate + `_uncatalogued`
+## P2 — Ingest + flywheel   (design: docs/INGEST.md · one pipeline, DraftTree, D-019)
+### P2a — Import (structure-preserving, deterministic core)
+- [ ] `ingest/models.py` (DraftTree/DraftBook/DraftPage) + frontmatter parsing (pyyaml)
+- [ ] `ingest/survey.py` (folder → DraftTree; detect provided/missing levels; depth rule)
+- [ ] `ingest/resolve.py` (shelf strategies: single / by-priority / auto-LLM grouping)
+- [ ] `ingest/importer.py` (get-or-create commit into store; idempotent re-runs)
+- [ ] `libkb import <folder> --domain X` + tests (LLM-free fixture) + import retail corpus
+### P2b — Ingest a document
+- [ ] `ingest/parse.py` (pdf via pymupdf4llm, html/url via trafilatura) · `split.py` (structure-aware)
+- [ ] `ingest/classify.py` (top-down placement, create-if-missing) + confidence gate + `_uncatalogued`
+- [ ] `POST /api/ingest` SSE stepper + Ingest UI tab (off mock) + review queue UI
+### P2c — Flywheel + catalog
 - [ ] `ingest/questions.py` (vi+en) · `catalog/` (db, store, search.lookup)
-- [ ] `ingest/pipeline.py` + `POST /api/ingest` SSE stepper + Ingest UI tab
 - [ ] `agent/tools.ask_librarian` + lookup entry-point shortcut in orchestrator
-- [ ] Review queue UI
 
 ## P3 — Strategies + measurement
 - [ ] `agent/classifier.py` (front door) · `synthesizer.py` (coverage_scan, map-reduce)

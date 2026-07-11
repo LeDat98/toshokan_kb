@@ -56,3 +56,21 @@
   web builds clean. Ingest + Observatory intentionally left on mock.ts (P2/P3).
 - Handoff: P2 = ingest pipeline + question flywheel + card catalog (see STATE.md). The
   ask_librarian tool + lookup shortcut plug into the navigator once the catalog exists.
+
+## 2026-07-12 — P2a import + ingest design (session 4, Opus)
+- User has a private, well-structured retail knowledge folder (12 topic folders, 92 md files, all
+  with rich YAML frontmatter incl. a hand-written question-phrased `description`). Discussed how to
+  ingest it AND raw PDFs. Their insight reframed the whole thing: don't build separate paths — have
+  ONE pipeline where a rulebase defines the 5 slots and the AI only fills what the source lacks.
+- Wrote `docs/INGEST.md` (the rulebase: provided-vs-missing per source shape, folder depth rule,
+  physical storage = copy into canonical library, shelf strategies, confidence gate). Updated
+  FUNCTIONS §8 pointer, ROADMAP P2→P2a/b/c, DECISIONS D-019/D-020.
+- Built P2a import: survey/resolve/importer + `libkb import`. Imported the real retail corpus;
+  `--shelves auto` had Gemini group 12 books into 3 clean thematic shelves; a retail `ask` then
+  walked into the imported KPI Dictionary and answered with a real citation. 8 new LLM-free tests
+  (55 total... actually 47 pass + 2 llm deselected); ruff clean.
+- Gotchas: (1) retail content is private but library/ is git-tracked → gitignored
+  `library/domains/retail/` (D-020); (2) recompute_stats churns every _meta.json → revert library/
+  before committing. Committed code/docs only; retail stays local.
+- Handoff: P2b (PDF/doc ingest) reuses DraftTree + importer.commit; the LLM classifier fills the
+  domain/shelf/page-split slots a raw doc leaves missing, gated by confidence → _uncatalogued.

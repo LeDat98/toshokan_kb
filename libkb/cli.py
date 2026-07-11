@@ -34,7 +34,21 @@ def main(argv: list[str] | None = None) -> int:
     ask_parser.add_argument("query")
     ask_parser.add_argument("--trace", action="store_true", help="Print the librarian's walk")
 
-    ingest_parser = sub.add_parser("ingest", help="Ingest a document [P2]")
+    import_parser = sub.add_parser("import", help="Import a structured folder [P2a]")
+    import_parser.add_argument("folder")
+    import_parser.add_argument("--domain", required=True, help="Target domain, e.g. Retail")
+    import_parser.add_argument(
+        "--shelves",
+        default="single",
+        choices=["single", "priority", "auto"],
+        help="How to fill the shelf level (auto = LLM groups by theme)",
+    )
+    import_parser.add_argument(
+        "--shelf-name", default="General", help="Name for the 'single' shelf"
+    )
+    import_parser.add_argument("--replace", action="store_true", help="Overwrite existing pages")
+
+    ingest_parser = sub.add_parser("ingest", help="Ingest a document [P2b]")
     ingest_parser.add_argument("source")
 
     sub.add_parser("eval", help="Run the routing eval — costs tokens [P3]")
@@ -70,6 +84,9 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    {child.title:<28} {child.stats_line}".rstrip())
         return 0
 
+    if args.command == "import":
+        return _cmd_import(args, settings)
+
     if args.command == "ask":
         return _cmd_ask(args, settings)
 
@@ -94,6 +111,49 @@ _TRACE_GLYPH = {
     "not_found": "✗",
     "budget": "⏱",
 }
+
+
+def _cmd_import(args, settings) -> int:
+    from pathlib import Path
+
+    from libkb.ingest.importer import import_folder
+
+    folder = Path(args.folder)
+    if not folder.is_dir():
+        print(f"Not a folder: {folder.resolve()}")
+        return 1
+    library_dir = settings.library_dir
+    store = LibraryStore(library_dir)
+    if not (library_dir / "_meta.json").exists():
+        store.init_library()
+
+    llm = None
+    if args.shelves == "auto":
+        from libkb.llm.client import get_llm
+
+        llm = get_llm()
+
+    report = import_folder(
+        folder,
+        args.domain,
+        store,
+        strategy=args.shelves,
+        shelf_name=args.shelf_name,
+        replace=args.replace,
+        llm=llm,
+        progress=print,
+    )
+    print(
+        f"\nImported into '{report.domain}': {report.shelves} shelves · "
+        f"{report.books} books · {report.pages} pages"
+        + (f" ({report.skipped_pages} pages skipped)" if report.skipped_pages else "")
+    )
+    print(f"  provided by source: {', '.join(report.provided)}")
+    print(f"  filled by import:   {', '.join(report.missing) or '(nothing missing)'}")
+    print(
+        "\nTip: run `libkb rebuild-views` to regenerate shelf/domain descriptions with the model."
+    )
+    return 0
 
 
 def _cmd_ask(args, settings) -> int:

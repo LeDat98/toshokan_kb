@@ -195,6 +195,13 @@ def nearest_pages(query, k=3) -> list[PageRef]   # fallback ladder step (orchest
 
 ## 8. `ingest/` [P2]
 
+> **Superseded by `docs/INGEST.md` (D-019).** Ingest is now ONE pipeline —
+> survey → DraftTree(provided/missing slots) → resolve gaps → commit — with two entry points:
+> `import` (folders, deterministic) and `ingest` (documents, LLM). Modules: `ingest/models.py`
+> (DraftTree), `ingest/survey.py`, `ingest/resolve.py`, `ingest/importer.py` [P2a];
+> `ingest/parse.py`, `ingest/split.py`, `ingest/classify.py` [P2b]; `ingest/questions.py` +
+> `catalog/` [P2c]. The function sketches below remain valid for the P2b/P2c LLM stages.
+
 ```python
 # parse.py
 def parse_to_markdown(source: Path | str) -> ParsedDoc      # .md passthrough; .pdf via pymupdf4llm;

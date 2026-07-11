@@ -28,6 +28,9 @@ logs/
 /Knowledge_Research-main.zip
 /_corpora/
 /_ingest_inbox/
+# Imported-from-private-source domains — content is private, keep out of git
+# (the publishable AI seed demo under library/domains/ai/ stays tracked)
+/library/domains/retail/
 
 # OS / IDE
 .DS_Store
