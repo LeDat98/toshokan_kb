@@ -11,6 +11,7 @@ TOC → page to answer, instead of one-shot vector similarity. Founding requirem
 
 ## Map
 - `docs/ARCHITECTURE.md` — principles **P1–P10** (source of truth for *why*), phases P0–P4.
+  Written in Vietnamese with Mermaid diagrams (D-015) — keep it that way when editing.
 - `docs/FUNCTIONS.md` — module/function specs (source of truth for *what to build*).
 - `docs/UI_DESIGN_BRIEF.md` — mockup context for Claude Design (UI source of truth).
 - `.agent/CONVENTIONS.md` — coding conventions (uv, ruff, pydantic v2, prompt/store discipline).

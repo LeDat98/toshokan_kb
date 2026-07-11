@@ -72,3 +72,11 @@ be lossy and slower. So: tokens live in `web/src/tokens.css` (light+dark via `da
 shared style factories in `web/src/ui.ts`, hover states as small utility classes. The design
 file is the styling source of truth — visual changes go through the Design project first.
 TanStack Query / openapi-typescript adoption deferred to P1 API wiring.
+
+## D-015 · 2026-07-11 · docs/ARCHITECTURE.md is maintained in Vietnamese with Mermaid diagrams
+User request: the architecture doc is Vietnamese (exception to D-009's English-docs rule, for
+this file only) and all diagrams are Mermaid fenced blocks so they render in Markdown preview
+(GitHub natively; VS Code needs the `bierner.markdown-mermaid` extension). Diagrams were
+syntax-validated via the Mermaid tool before committing. Other docs (FUNCTIONS.md, UI brief,
+.agent/*) stay English until asked. Content parity with the old English version preserved;
+the phase table now tracks live status.
