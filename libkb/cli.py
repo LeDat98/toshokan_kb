@@ -48,8 +48,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     import_parser.add_argument("--replace", action="store_true", help="Overwrite existing pages")
 
-    ingest_parser = sub.add_parser("ingest", help="Ingest a document [P2b]")
-    ingest_parser.add_argument("source")
+    ingest_parser = sub.add_parser("ingest", help="Ingest a document (pdf/md/html/url) [P2b]")
+    ingest_parser.add_argument("source", help="A file path or a URL")
+    ingest_parser.add_argument("--replace", action="store_true", help="Overwrite existing pages")
+    ingest_parser.add_argument(
+        "--gate", type=float, default=None, help="Confidence gate override (default from .env)"
+    )
 
     sub.add_parser("eval", help="Run the routing eval — costs tokens [P3]")
     sub.add_parser("rebuild-views", help="Regenerate all descriptions bottom-up [P1]")
@@ -86,6 +90,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "import":
         return _cmd_import(args, settings)
+
+    if args.command == "ingest":
+        return _cmd_ingest(args, settings)
 
     if args.command == "ask":
         return _cmd_ask(args, settings)
@@ -153,6 +160,37 @@ def _cmd_import(args, settings) -> int:
     print(
         "\nTip: run `libkb rebuild-views` to regenerate shelf/domain descriptions with the model."
     )
+    return 0
+
+
+def _cmd_ingest(args, settings) -> int:
+    from libkb.ingest.pipeline import IngestEvent, ingest_document
+
+    library_dir = settings.library_dir
+    store = LibraryStore(library_dir)
+    if not (library_dir / "_meta.json").exists():
+        store.init_library()
+
+    print(f"Ingesting: {args.source}\n")
+
+    def on_event(ev: IngestEvent) -> None:
+        mark = {"running": "…", "done": "✓", "gated": "⚑", "failed": "✗"}.get(ev.status, "·")
+        detail = f"  {ev.detail}" if ev.detail else ""
+        print(f"  {mark} {ev.stage}{detail}")
+
+    outcome = ingest_document(
+        args.source, store, gate=args.gate, replace=args.replace, event_cb=on_event
+    )
+    place = outcome.placement
+    print("\n" + "─" * 60)
+    if outcome.gated:
+        print(f"Low confidence ({place.confidence:.2f}) → parked in Uncatalogued for review.")
+        print(f"  Proposed: {place.path}")
+        print(f"  Why: {place.rationale}")
+        print("  Review it in the Ingest queue, or re-run after adjusting.")
+    else:
+        print(f"Filed under: {outcome.book_path}  ({outcome.n_pages} pages)")
+        print(f"  Confidence {place.confidence:.2f} — {place.rationale}")
     return 0
 
 

@@ -60,7 +60,7 @@ def commit(
     replace: bool = False,
     progress: ProgressCB | None = None,
 ) -> ImportReport:
-    domain = _get_or_create(store, ROOT_ID, "domain", tree.domain_title, tree.domain_description)
+    domain = get_or_create(store, ROOT_ID, "domain", tree.domain_title, tree.domain_description)
     report = ImportReport(
         domain=domain.title,
         shelf_strategy=strategy,
@@ -68,10 +68,10 @@ def commit(
         missing=sorted(tree.missing),
     )
     for shelf in tree.shelves:
-        sh = _get_or_create(store, domain.id, "shelf", shelf.title, shelf.description)
+        sh = get_or_create(store, domain.id, "shelf", shelf.title, shelf.description)
         report.shelves += 1
         for book in shelf.books:
-            bk = _get_or_create(
+            bk = get_or_create(
                 store, sh.id, "book", book.title, book.description or _book_description(book)
             )
             report.books += 1
@@ -96,7 +96,7 @@ def commit(
     return report
 
 
-def _get_or_create(
+def get_or_create(
     store: LibraryStore, parent_id: NodeID, kind: NodeKind, title: str, description: str
 ) -> NodeMeta:
     slug = slugify(title)
