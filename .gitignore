@@ -23,6 +23,12 @@ library/_catalog/*.db-*
 logs/
 .cache/
 
+# Local test corpora — source docs to ingest, never published
+/Knowledge_Research-main/
+/Knowledge_Research-main.zip
+/_corpora/
+/_ingest_inbox/
+
 # OS / IDE
 .DS_Store
 Thumbs.db
