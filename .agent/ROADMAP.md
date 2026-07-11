@@ -29,10 +29,12 @@ Phase details and rationale: `docs/ARCHITECTURE.md` §8. Function specs: `docs/F
 - [ ] `ingest/resolve.py` (shelf strategies: single / by-priority / auto-LLM grouping)
 - [ ] `ingest/importer.py` (get-or-create commit into store; idempotent re-runs)
 - [ ] `libkb import <folder> --domain X` + tests (LLM-free fixture) + import retail corpus
-### P2b — Ingest a document
-- [ ] `ingest/parse.py` (pdf via pymupdf4llm, html/url via trafilatura) · `split.py` (structure-aware)
-- [ ] `ingest/classify.py` (top-down placement, create-if-missing) + confidence gate + `_uncatalogued`
-- [ ] `POST /api/ingest` SSE stepper + Ingest UI tab (off mock) + review queue UI
+### P2b — Ingest a document ✅ (2026-07-12)
+- [x] `ingest/parse.py` (pdf via pymupdf4llm, html/url via trafilatura, md/txt) · `split.py` (heading-based + size fallback)
+- [x] `ingest/classify.py` (top-down placement, create-if-missing, reconciled) + confidence gate + `_uncatalogued`
+- [x] `ingest/pipeline.py` (ingest_document + list_uncatalogued + approve_placement); `libkb ingest <src>`
+- [x] `POST /api/ingest` + `/api/import` (SSE) + `/api/ingest/review` + approve; Ingest UI wired off mock
+  (file/URL upload + folder-path import + live stepper + review queue). Verified live end-to-end.
 ### P2c — Flywheel + catalog
 - [ ] `ingest/questions.py` (vi+en) · `catalog/` (db, store, search.lookup)
 - [ ] `agent/tools.ask_librarian` + lookup entry-point shortcut in orchestrator

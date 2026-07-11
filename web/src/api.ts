@@ -141,6 +141,121 @@ function dispatch(raw: string, handlers: StreamHandlers): void {
   else if (event === "error") handlers.onError?.(payload.message ?? "error");
 }
 
+// ---------------------------------------------------------------- ingest / import
+
+export interface IngestStep {
+  stage: "parse" | "split" | "classify" | "file";
+  status: "running" | "done" | "gated" | "failed";
+  detail: string;
+}
+
+export interface IngestOutcome {
+  status: "filed" | "uncatalogued";
+  book_id: string;
+  book_path: string;
+  n_pages: number;
+  gated: boolean;
+  confidence: number;
+  proposed_path: string;
+  rationale: string;
+  source_type: string;
+}
+
+export interface ReviewRow {
+  id: string;
+  title: string;
+  n_pages: number;
+  proposed_domain: string;
+  proposed_shelf: string;
+  confidence: number | null;
+  rationale: string;
+}
+
+export interface ImportReport {
+  domain: string;
+  shelves: number;
+  books: number;
+  pages: number;
+  skipped_pages: number;
+  provided: string[];
+  missing: string[];
+  paths: string[];
+}
+
+async function readSSE(res: Response, onEvent: (event: string, data: any) => void): Promise<void> {
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let boundary: number;
+    while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+      const raw = buffer.slice(0, boundary);
+      buffer = buffer.slice(boundary + 2);
+      let event = "message";
+      let data = "";
+      for (const line of raw.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data += line.slice(5).trim();
+      }
+      if (data) onEvent(event, JSON.parse(data));
+    }
+  }
+}
+
+export async function streamIngest(
+  form: FormData,
+  h: { onStep?: (s: IngestStep) => void; onOutcome?: (o: IngestOutcome) => void; onError?: (m: string) => void; onDone?: () => void },
+): Promise<void> {
+  try {
+    const res = await fetch("/api/ingest", { method: "POST", body: form });
+    await readSSE(res, (ev, d) => {
+      if (ev === "step") h.onStep?.(d);
+      else if (ev === "outcome") h.onOutcome?.(d);
+      else if (ev === "error") h.onError?.(d.message);
+    });
+  } catch (e) {
+    h.onError?.(String(e));
+  }
+  h.onDone?.();
+}
+
+export async function streamImport(
+  body: { folder_path: string; domain: string; shelves: string; shelf_name?: string },
+  h: { onLog?: (m: string) => void; onReport?: (r: ImportReport) => void; onError?: (m: string) => void; onDone?: () => void },
+): Promise<void> {
+  try {
+    const res = await fetch("/api/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    await readSSE(res, (ev, d) => {
+      if (ev === "log") h.onLog?.(d.message);
+      else if (ev === "report") h.onReport?.(d);
+      else if (ev === "error") h.onError?.(d.message);
+    });
+  } catch (e) {
+    h.onError?.(String(e));
+  }
+  h.onDone?.();
+}
+
+export const fetchReview = () => json<{ rows: ReviewRow[] }>("/api/ingest/review").then((r) => r.rows);
+
+export async function approveReview(bookId: string, domain: string, shelf: string): Promise<string> {
+  const res = await fetch(`/api/ingest/review/${bookId}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ domain, shelf }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()).path as string;
+}
+
 const json = async <T>(url: string): Promise<T> => {
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);

@@ -74,3 +74,21 @@
   before committing. Committed code/docs only; retail stays local.
 - Handoff: P2b (PDF/doc ingest) reuses DraftTree + importer.commit; the LLM classifier fills the
   domain/shelf/page-split slots a raw doc leaves missing, gated by confidence → _uncatalogued.
+
+## 2026-07-12 — P2b document ingest + Ingest UI wiring (session 5, Opus)
+- User noticed the Ingest screen was a non-functional mockup (only a fake link box). Built P2b:
+  parse (md/txt/pdf/html/url, lazy deps), split (heading + size fallback), classify (LLM top-down
+  placement vs the live tree, create-if-missing, reconciled to reality, confidence), pipeline
+  (parse→split→classify→file; low confidence → _uncatalogued; list/approve for review). Then the
+  API (ingest/import SSE + review + approve) and a full rewrite of the Ingest screen off mock.
+- Verified LIVE, twice: a Zero Trust markdown doc, ingested into a library that only had AI,
+  had Gemini propose a NEW "Cybersecurity" domain + "Zero Trust" shelf and file 5 pages; with a
+  high gate it parked in Uncatalogued and the API review→approve moved it to AI ▸ Security. This
+  is the "AI builds the hierarchy from a raw doc" story the user asked about, working.
+- Gotcha D-021: the uvicorn worker inherits cp932; structlog logging a path with "▸" crashed the
+  ingest request. Fixed by forcing UTF-8 stdout in api/main.py (same as CLI). Found via a real
+  failing SSE run — the error came back as an `error` event my curl parser had filtered out.
+- Also: Windows left port 8000 in a zombie LISTEN state after killing a --reload uvicorn; verified
+  the API on 8001 instead. Frontend builds clean; 55 backend tests green; ruff clean.
+- 3 commits: b33f0b9-ish chain … P2b backend e860bf8, then P2b API+UI (this).
+- Handoff: P2c = question flywheel + SQLite card catalog + ask_librarian (see STATE.md).

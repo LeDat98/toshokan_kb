@@ -1,475 +1,352 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Icon } from "../icons";
-import { PathChip, Seg } from "../components/PathChip";
+import { PathChip } from "../components/PathChip";
 import { useToast } from "../components/Toast";
-import { INGEST_JOBS, INGEST_STEP_LABELS, REVIEW_ROWS, type IngestStepStatus } from "../data/mock";
-import { actionBtnStyle, primaryBtnStyle, sectionLabelStyle, sepStyle } from "../ui";
+import {
+  approveReview,
+  fetchReview,
+  streamImport,
+  streamIngest,
+  type ImportReport,
+  type IngestOutcome,
+  type IngestStep,
+  type ReviewRow,
+} from "../api";
+import { actionBtnStyle, badge, primaryBtnStyle, sectionLabelStyle } from "../ui";
 
-const STEP_COLOR: Record<IngestStepStatus, string> = {
-  done: "var(--success)",
-  running: "var(--walk)",
-  failed: "var(--danger)",
-  pending: "var(--ink-faint)",
+const STAGES = ["parse", "split", "classify", "file"] as const;
+const STAGE_LABEL: Record<string, string> = {
+  parse: "Parse",
+  split: "Split",
+  classify: "Classify",
+  file: "File",
 };
-const STEP_BG: Record<IngestStepStatus, string> = {
-  done: "var(--success-weak)",
-  running: "var(--walk-weak)",
-  failed: "var(--danger-weak)",
-  pending: "var(--surface-sunk)",
-};
 
-function PipelineStepper({ states, dark }: { states: IngestStepStatus[]; dark: boolean }) {
-  return (
-    <div style={{ display: "flex", alignItems: "flex-start", padding: "0 4px" }}>
-      {states.map((s, i) => (
-        <div key={i} style={{ display: "contents" }}>
-          <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "none" }}>
-            <span
-              style={{
-                flex: "none",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                width: 28,
-                height: 28,
-                borderRadius: "50%",
-                background: STEP_BG[s],
-                color: STEP_COLOR[s],
-                border: `1.5px solid ${s === "pending" ? "var(--border)" : STEP_COLOR[s]}`,
-                animation:
-                  s === "running"
-                    ? dark
-                      ? "lampDark 1.4s ease-in-out infinite"
-                      : "lamp 1.4s ease-in-out infinite"
-                    : undefined,
-              }}
-            >
-              {s === "done" ? (
-                <Icon name="check" size={14} />
-              ) : s === "failed" ? (
-                <Icon name="x" size={13} />
-              ) : (
-                <Icon name="dot" size={s === "running" ? 12 : 8} />
-              )}
-            </span>
-            <span
-              style={{
-                fontSize: 10.5,
-                fontWeight: s === "running" || s === "failed" ? 700 : 500,
-                color: s === "pending" ? "var(--ink-faint)" : STEP_COLOR[s],
-                marginTop: 6,
-                whiteSpace: "nowrap",
-              }}
-            >
-              {INGEST_STEP_LABELS[i]}
-            </span>
-          </div>
-          {i !== states.length - 1 && (
-            <div
-              style={{
-                flex: 1,
-                height: 2,
-                margin: "13px 4px 0",
-                background: s === "done" ? "var(--success)" : "var(--border)",
-                minWidth: 14,
-              }}
-            />
-          )}
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function ConfidenceBar({ value, gate }: { value: number; gate: number }) {
-  const color = value >= gate ? "var(--success)" : "var(--warning)";
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--ink-muted)", marginBottom: 6 }}>
-        <span>Confidence</span>
-        <span style={{ fontFamily: "var(--mono)", fontWeight: 600, color }}>{value.toFixed(2)}</span>
-      </div>
-      <div style={{ position: "relative", height: 8, borderRadius: 5, background: "var(--surface-sunk)", border: "1px solid var(--border)" }}>
-        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: `${value * 100}%`, background: color, borderRadius: 5 }} />
-        <div style={{ position: "absolute", left: `${gate * 100}%`, top: -4, bottom: -4, width: 2, background: "var(--ink)", borderRadius: 1 }} />
-        <div
-          style={{
-            position: "absolute",
-            left: `${gate * 100}%`,
-            top: -20,
-            transform: "translateX(-50%)",
-            fontFamily: "var(--mono)",
-            fontSize: 9.5,
-            color: "var(--ink-muted)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          gate {gate.toFixed(2)}
-        </div>
-      </div>
-    </div>
-  );
+function pathToSegs(path: string) {
+  const kinds = ["domain", "shelf", "book", "page"] as const;
+  return path.split(" ▸ ").filter(Boolean).map((label, i) => ({
+    kind: kinds[Math.min(i, kinds.length - 1)],
+    label,
+    dot: true,
+  }));
 }
 
 export function Ingest({ dark, goLibrary }: { dark: boolean; goLibrary: () => void }) {
-  const toast = useToast();
   const [tab, setTab] = useState<"new" | "review">("new");
-  const [reviewOpen, setReviewOpen] = useState<Record<string, boolean>>({});
+  const [reviewCount, setReviewCount] = useState(0);
 
-  const tabStyle = (active: boolean): CSSProperties => ({
-    display: "inline-flex",
-    alignItems: "center",
-    gap: 8,
-    padding: "9px 16px",
-    border: 0,
-    borderRadius: 9,
-    fontSize: 13.5,
-    fontWeight: 600,
-    cursor: "pointer",
-    background: active ? "var(--surface-raised)" : "transparent",
-    color: active ? "var(--ink)" : "var(--ink-muted)",
-    boxShadow: active ? "var(--shadow-sm)" : "none",
-  });
+  const refreshReview = () => fetchReview().then((r) => setReviewCount(r.length)).catch(() => {});
+  useEffect(() => {
+    refreshReview();
+  }, []);
 
   return (
     <div style={{ height: "100%", overflowY: "auto" }}>
       <div style={{ maxWidth: 820, margin: "0 auto", padding: "28px 32px 40px" }}>
         <div style={{ display: "flex", alignItems: "baseline", gap: 14, marginBottom: 6 }}>
           <h1 style={{ fontFamily: "var(--serif)", fontWeight: 600, fontSize: 26, margin: 0, letterSpacing: -0.4 }}>Ingest</h1>
-          <span style={{ fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 15, color: "var(--ink-muted)" }}>
-            Add books to the library
-          </span>
+          <span style={{ fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 15, color: "var(--ink-muted)" }}>Add knowledge to the library</span>
         </div>
         <p style={{ color: "var(--ink-muted)", fontSize: 14, margin: "0 0 20px" }}>
-          Drop a document and the librarian parses, classifies, and shelves it — you approve where it lands.
+          Import a structured folder, or drop a single document — the librarian parses it, decides where it belongs, and files it (or asks you when unsure).
         </p>
 
         <div style={{ display: "inline-flex", background: "var(--surface-sunk)", border: "1px solid var(--border)", borderRadius: 11, padding: 4, marginBottom: 22 }}>
-          <button onClick={() => setTab("new")} style={tabStyle(tab === "new")}>
-            New ingest
-          </button>
-          <button onClick={() => setTab("review")} style={tabStyle(tab === "review")}>
-            Review queue{" "}
-            <span
-              style={{
-                minWidth: 18,
-                height: 18,
-                padding: "0 5px",
-                borderRadius: 9,
-                background: "var(--warning)",
-                color: "#fff",
-                fontSize: 11,
-                fontWeight: 700,
-                display: "inline-flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              3
-            </span>
-          </button>
+          <TabButton active={tab === "new"} onClick={() => setTab("new")}>New ingest</TabButton>
+          <TabButton active={tab === "review"} onClick={() => { setTab("review"); refreshReview(); }}>
+            Review queue
+            {reviewCount > 0 && (
+              <span style={{ minWidth: 18, height: 18, padding: "0 5px", borderRadius: 9, background: "var(--warning)", color: "#fff", fontSize: 11, fontWeight: 700, display: "inline-flex", alignItems: "center", justifyContent: "center" }}>{reviewCount}</span>
+            )}
+          </TabButton>
         </div>
 
         {tab === "new" ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-            <div style={{ border: "2px dashed var(--border-strong)", borderRadius: 14, background: "var(--surface-raised)", padding: 28, textAlign: "center" }}>
-              <div
-                style={{
-                  display: "inline-flex",
-                  width: 60,
-                  height: 60,
-                  borderRadius: 14,
-                  background: "var(--accent-weak)",
-                  color: "var(--accent)",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  marginBottom: 12,
-                }}
-              >
-                <Icon name="inboxplus" size={30} sw={1.4} />
-              </div>
-              <div style={{ fontFamily: "var(--serif)", fontWeight: 600, fontSize: 17 }}>Drop a file to ingest</div>
-              <div style={{ fontSize: 13, color: "var(--ink-muted)", margin: "5px 0 16px" }}>PDF, Markdown or HTML · or paste a URL</div>
-              <div style={{ display: "flex", gap: 10, maxWidth: 480, margin: "0 auto" }}>
-                <input
-                  placeholder="https://…"
-                  style={{
-                    flex: 1,
-                    height: 40,
-                    padding: "0 13px",
-                    border: "1px solid var(--border)",
-                    borderRadius: 9,
-                    background: "var(--surface-sunk)",
-                    outline: "none",
-                    fontSize: 13,
-                    color: "var(--ink)",
-                  }}
-                />
-                <button
-                  onClick={() => toast("Fetch queued (mock)", "inboxplus")}
-                  style={{ height: 40, padding: "0 18px", background: "var(--accent)", color: "var(--accent-ink)", border: 0, borderRadius: 9, fontSize: 13, fontWeight: 600, cursor: "pointer" }}
-                >
-                  Fetch
-                </button>
-              </div>
-              <div style={{ fontSize: 11.5, fontStyle: "italic", color: "var(--ink-faint)", marginTop: 14 }}>
-                Sources are classified automatically by the librarian
-              </div>
-            </div>
-
-            <div style={{ ...sectionLabelStyle, marginTop: 6 }}>Active jobs</div>
-
-            {INGEST_JOBS.map((j) => (
-              <div key={j.id} style={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 14, padding: "18px 20px", boxShadow: "var(--shadow-sm)" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: 11, marginBottom: 18 }}>
-                  <span
-                    style={{
-                      flex: "none",
-                      width: 34,
-                      height: 34,
-                      borderRadius: 9,
-                      background: "var(--surface-sunk)",
-                      color: "var(--page)",
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Icon name="page" size={20} />
-                  </span>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 600 }}>{j.file}</div>
-                    <div style={{ fontSize: 11.5, color: "var(--ink-faint)", marginTop: 2 }}>{j.meta}</div>
-                  </div>
-                </div>
-                <PipelineStepper states={j.steps} dark={dark} />
-
-                {j.showRetry && (
-                  <div
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 10,
-                      marginTop: 16,
-                      padding: "11px 14px",
-                      background: "var(--danger-weak)",
-                      border: "1px solid var(--border)",
-                      borderLeft: "3px solid var(--danger)",
-                      borderRadius: 10,
-                    }}
-                  >
-                    <span style={{ color: "var(--danger)" }}>
-                      <Icon name="alert" size={13} />
-                    </span>
-                    <span style={{ flex: 1, fontSize: 13, color: "var(--ink)" }}>Split failed — document has a corrupt page range.</span>
-                    <button
-                      onClick={() => toast("Retry queued", "return")}
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 6,
-                        padding: "6px 12px",
-                        background: "var(--danger)",
-                        color: "#fff",
-                        border: 0,
-                        borderRadius: 8,
-                        fontSize: 12.5,
-                        fontWeight: 600,
-                        cursor: "pointer",
-                      }}
-                    >
-                      <Icon name="return" size={14} />
-                      Retry
-                    </button>
-                  </div>
-                )}
-
-                {j.showClassify && (
-                  <div style={{ marginTop: 18, paddingTop: 18, borderTop: "1px solid var(--border)" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--walk)" }}>
-                        Classify · needs your OK
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 12, color: "var(--ink-muted)", marginBottom: 7 }}>Proposed placement — edit if wrong:</div>
-                    <div
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: 7,
-                        padding: "8px 13px",
-                        background: "var(--surface-sunk)",
-                        border: "1px dashed var(--border-strong)",
-                        borderRadius: 9,
-                        fontSize: 12.5,
-                        marginBottom: 16,
-                      }}
-                    >
-                      <Seg s={{ kind: "domain", label: "AI", dot: true }} />
-                      <span style={sepStyle}>▸</span>
-                      <Seg s={{ kind: "shelf", label: "LLM", dot: true }} />
-                      <span style={sepStyle}>▸</span>
-                      <span style={{ color: "var(--book)", fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 }}>
-                        + new shelf · Foundations
-                      </span>
-                    </div>
-                    <ConfidenceBar value={0.86} gate={0.7} />
-                    <div style={{ fontSize: 12.5, color: "var(--ink-muted)", lineHeight: 1.5, marginBottom: 16 }}>
-                      Rationale — the document introduces the Transformer architecture and self-attention; strongest
-                      overlap with LLM foundations, no existing shelf fits so a new one is proposed.
-                    </div>
-                    <div style={{ display: "flex", gap: 9 }}>
-                      <button onClick={() => toast("Placement accepted — filing", "check")} style={primaryBtnStyle}>
-                        <Icon name="check" size={15} />
-                        Accept placement
-                      </button>
-                      <button onClick={() => toast("Location picker (mock)", "shelf")} style={{ ...actionBtnStyle, padding: "9px 15px" }}>
-                        Change location
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-
-            <div style={{ ...sectionLabelStyle, marginTop: 6 }}>Completed</div>
-            <div
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 16,
-                background: "var(--surface-raised)",
-                border: "1px solid var(--border)",
-                borderLeft: "3px solid var(--success)",
-                borderRadius: 12,
-                padding: "15px 18px",
-                boxShadow: "var(--shadow-sm)",
-                flexWrap: "wrap",
-              }}
-            >
-              <span style={{ color: "var(--success)" }}>
-                <Icon name="check" size={15} />
-              </span>
-              <PathChip
-                small
-                segs={[
-                  { kind: "domain", label: "AI" },
-                  { kind: "shelf", label: "LLM" },
-                  { kind: "book", label: "Foundations" },
-                ]}
-              />
-              <span style={{ flex: 1 }} />
-              {["18 pages", "72 questions (vi+en)", "14.2k tokens", "31s"].map((m) => (
-                <span key={m} style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--ink-muted)" }}>
-                  {m}
-                </span>
-              ))}
-              <a
-                href="#book"
-                onClick={(e) => {
-                  e.preventDefault();
-                  goLibrary();
-                }}
-                style={{ fontSize: 12.5, fontWeight: 600 }}
-              >
-                Open book →
-              </a>
-            </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+            <DocumentIngest dark={dark} goLibrary={goLibrary} onChanged={refreshReview} />
+            <FolderImport onChanged={refreshReview} />
           </div>
         ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 16px", fontSize: 11, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "var(--ink-faint)" }}>
-              <span style={{ flex: 1 }}>Uncatalogued book</span>
-              <span style={{ width: 110 }}>Proposed path</span>
-              <span style={{ width: 90 }}>Confidence</span>
-              <span style={{ width: 60 }}>Age</span>
-              <span style={{ width: 20 }} />
-            </div>
-            {REVIEW_ROWS.map((r) => {
-              const open = !!reviewOpen[r.id];
-              const confColor = r.conf >= 0.7 ? "var(--success)" : "var(--warning)";
-              return (
-                <div key={r.id} style={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 12, boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
-                  <div
-                    onClick={() => setReviewOpen((s) => ({ ...s, [r.id]: !s[r.id] }))}
-                    className="h-bg-hover"
-                    style={{ display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", cursor: "pointer" }}
-                  >
-                    <div style={{ flex: 1, minWidth: 0, display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ color: "var(--page)" }}>
-                        <Icon name="page" size={20} />
-                      </span>
-                      <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 600 }}>{r.title}</span>
-                    </div>
-                    <div style={{ width: 110, fontSize: 11.5, color: "var(--ink-muted)", fontFamily: "var(--mono)" }}>
-                      {r.path[0]} ▸ {r.path[1]}
-                    </div>
-                    <div style={{ width: 90 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", fontFamily: "var(--mono)", fontSize: 11, marginBottom: 3 }}>
-                        <span style={{ color: "var(--warning)" }}>low</span>
-                        <span style={{ fontWeight: 600, color: confColor }}>{r.conf.toFixed(2)}</span>
-                      </div>
-                      <div style={{ height: 5, borderRadius: 3, background: "var(--surface-sunk)", overflow: "hidden" }}>
-                        <div style={{ height: "100%", width: `${r.conf * 100}%`, background: confColor, borderRadius: 3 }} />
-                      </div>
-                    </div>
-                    <div style={{ width: 60, fontSize: 12, color: "var(--ink-faint)" }}>{r.age}</div>
-                    <span style={{ width: 20, color: "var(--ink-faint)" }}>
-                      <Icon name={open ? "chevDown" : "chevR"} size={13} />
-                    </span>
-                  </div>
-                  {open && (
-                    <div style={{ padding: "16px 18px", borderTop: "1px solid var(--border)", background: "var(--surface-sunk)", display: "flex", gap: 22, flexWrap: "wrap" }}>
-                      <div style={{ flex: 1, minWidth: 200 }}>
-                        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "var(--ink-faint)", marginBottom: 8 }}>
-                          Preview · TOC excerpt
-                        </div>
-                        <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                          {r.toc.map((t) => (
-                            <div key={t} style={{ fontSize: 12.5, color: "var(--ink-muted)" }}>
-                              {t}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div style={{ flex: 1, minWidth: 220 }}>
-                        <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: ".05em", textTransform: "uppercase", color: "var(--ink-faint)", marginBottom: 8 }}>
-                          Place it
-                        </div>
-                        <PathChip
-                          small
-                          segs={[
-                            { kind: "domain", label: r.path[0] },
-                            { kind: "shelf", label: r.path[1] },
-                            { kind: "book", label: r.path[2] },
-                          ]}
-                          style={{ background: "var(--surface-raised)", marginBottom: 12 }}
-                        />
-                        <div style={{ display: "flex", gap: 8 }}>
-                          <button
-                            onClick={() => {
-                              setReviewOpen((s) => ({ ...s, [r.id]: false }));
-                              toast("Approved — shelved", "check");
-                            }}
-                            style={{ ...primaryBtnStyle, padding: "8px 14px", fontSize: 12.5 }}
-                          >
-                            <Icon name="check" size={15} />
-                            Approve shelf
-                          </button>
-                          <button onClick={() => toast("Re-classification queued", "return")} style={{ ...actionBtnStyle, padding: "8px 13px" }}>
-                            Re-classify
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
+          <ReviewQueue onChanged={() => { refreshReview(); }} goLibrary={goLibrary} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button onClick={onClick} style={{ display: "inline-flex", alignItems: "center", gap: 8, padding: "9px 16px", border: 0, borderRadius: 9, fontSize: 13.5, fontWeight: 600, cursor: "pointer", background: active ? "var(--surface-raised)" : "transparent", color: active ? "var(--ink)" : "var(--ink-muted)", boxShadow: active ? "var(--shadow-sm)" : "none" }}>
+      {children}
+    </button>
+  );
+}
+
+const cardStyle: CSSProperties = { background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 14, padding: "20px 22px", boxShadow: "var(--shadow-sm)" };
+const inputStyle: CSSProperties = { flex: 1, height: 40, padding: "0 13px", border: "1px solid var(--border)", borderRadius: 9, background: "var(--surface-sunk)", outline: "none", fontSize: 13, color: "var(--ink)" };
+
+// ---------------------------------------------------------------- document ingest
+
+function DocumentIngest({ dark, goLibrary, onChanged }: { dark: boolean; goLibrary: () => void; onChanged: () => void }) {
+  const toast = useToast();
+  const [url, setUrl] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [steps, setSteps] = useState<IngestStep[]>([]);
+  const [outcome, setOutcome] = useState<IngestOutcome | null>(null);
+  const [busy, setBusy] = useState(false);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const run = () => {
+    const file = fileRef.current?.files?.[0];
+    if (!file && !url.trim()) {
+      toast("Choose a file or paste a URL", "alert");
+      return;
+    }
+    const form = new FormData();
+    if (file) form.append("file", file);
+    else form.append("url", url.trim());
+    setSteps([]);
+    setOutcome(null);
+    setBusy(true);
+    streamIngest(form, {
+      onStep: (s) => setSteps((prev) => [...prev.filter((p) => p.stage !== s.stage), s]),
+      onOutcome: (o) => setOutcome(o),
+      onError: (m) => toast(m, "alert"),
+      onDone: () => {
+        setBusy(false);
+        onChanged();
+      },
+    });
+  };
+
+  const statusOf = (stage: string): IngestStep["status"] | "pending" =>
+    steps.find((s) => s.stage === stage)?.status ?? "pending";
+
+  return (
+    <div>
+      <div style={{ ...sectionLabelStyle, marginBottom: 10 }}>Ingest one document</div>
+      <div style={cardStyle}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <input ref={fileRef} type="file" accept=".pdf,.md,.markdown,.txt,.html,.htm" onChange={(e) => setFileName(e.target.files?.[0]?.name ?? "")} style={{ display: "none" }} />
+          <button onClick={() => fileRef.current?.click()} style={{ ...actionBtnStyle, height: 40, padding: "0 14px" }}>
+            <Icon name="inboxplus" size={16} />
+            {fileName || "Choose file (pdf/md/html)"}
+          </button>
+          <span style={{ color: "var(--ink-faint)", fontSize: 12 }}>or</span>
+          <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://… (a page URL)" style={inputStyle} />
+          <button onClick={run} disabled={busy} style={{ ...primaryBtnStyle, height: 40, opacity: busy ? 0.6 : 1 }}>
+            {busy ? "Ingesting…" : "Ingest"}
+          </button>
+        </div>
+        <div style={{ fontSize: 11.5, fontStyle: "italic", color: "var(--ink-faint)", marginTop: 10 }}>
+          The librarian classifies it into the tree; low-confidence placements go to the review queue.
+        </div>
+
+        {steps.length > 0 && (
+          <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid var(--border)" }}>
+            <Stepper stages={STAGES as unknown as string[]} statusOf={statusOf} dark={dark} steps={steps} />
+          </div>
+        )}
+
+        {outcome && (
+          <div style={{ marginTop: 18, padding: "14px 16px", borderRadius: 11, border: "1px solid var(--border)", borderLeft: `3px solid ${outcome.gated ? "var(--warning)" : "var(--success)"}`, background: outcome.gated ? "var(--warning-weak)" : "var(--success-weak)" }}>
+            {outcome.gated ? (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ color: "var(--warning)" }}><Icon name="alert" size={15} /></span>
+                  <strong style={{ fontSize: 13.5 }}>Sent to review</strong>
+                  <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--ink-muted)" }}>confidence {outcome.confidence.toFixed(2)}</span>
                 </div>
-              );
-            })}
+                <div style={{ fontSize: 13, color: "var(--ink-muted)", marginBottom: 8 }}>Proposed: {outcome.proposed_path} — {outcome.rationale}</div>
+              </>
+            ) : (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <span style={{ color: "var(--success)" }}><Icon name="check" size={15} /></span>
+                  <strong style={{ fontSize: 13.5 }}>Filed</strong>
+                  <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--ink-muted)" }}>{outcome.n_pages} pages · confidence {outcome.confidence.toFixed(2)}</span>
+                </div>
+                <PathChip small segs={pathToSegs(outcome.book_path)} onClick={goLibrary} hover title="Open in the library" />
+              </>
+            )}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function Stepper({ stages, statusOf, dark, steps }: { stages: string[]; statusOf: (s: string) => string; dark: boolean; steps: IngestStep[] }) {
+  const color = { done: "var(--success)", gated: "var(--warning)", running: "var(--walk)", failed: "var(--danger)", pending: "var(--ink-faint)" } as Record<string, string>;
+  const bg = { done: "var(--success-weak)", gated: "var(--warning-weak)", running: "var(--walk-weak)", failed: "var(--danger-weak)", pending: "var(--surface-sunk)" } as Record<string, string>;
+  return (
+    <div style={{ display: "flex", alignItems: "flex-start", padding: "0 4px" }}>
+      {stages.map((stage, i) => {
+        const st = statusOf(stage);
+        const detail = steps.find((s) => s.stage === stage)?.detail ?? "";
+        return (
+          <div key={stage} style={{ display: "contents" }}>
+            <div style={{ display: "flex", flexDirection: "column", alignItems: "center", flex: "none", minWidth: 84 }}>
+              <span style={{ width: 28, height: 28, borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", background: bg[st], color: color[st], border: `1.5px solid ${st === "pending" ? "var(--border)" : color[st]}`, animation: st === "running" ? (dark ? "lampDark 1.4s ease-in-out infinite" : "lamp 1.4s ease-in-out infinite") : undefined }}>
+                {st === "done" ? <Icon name="check" size={14} /> : st === "gated" ? <Icon name="alert" size={13} /> : st === "failed" ? <Icon name="x" size={13} /> : <Icon name="dot" size={st === "running" ? 12 : 8} />}
+              </span>
+              <span style={{ fontSize: 10.5, fontWeight: st === "running" || st === "gated" ? 700 : 500, color: st === "pending" ? "var(--ink-faint)" : color[st], marginTop: 6 }}>{STAGE_LABEL[stage]}</span>
+              {detail && <span style={{ fontSize: 9.5, color: "var(--ink-faint)", marginTop: 2, maxWidth: 80, textAlign: "center", lineHeight: 1.3 }}>{detail.slice(0, 28)}</span>}
+            </div>
+            {i < stages.length - 1 && <div style={{ flex: 1, height: 2, margin: "13px 2px 0", background: statusOf(stages[i]) === "done" ? "var(--success)" : "var(--border)", minWidth: 12 }} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- folder import
+
+function FolderImport({ onChanged }: { onChanged: () => void }) {
+  const toast = useToast();
+  const [path, setPath] = useState("");
+  const [domain, setDomain] = useState("");
+  const [shelves, setShelves] = useState("auto");
+  const [logs, setLogs] = useState<string[]>([]);
+  const [report, setReport] = useState<ImportReport | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const run = () => {
+    if (!path.trim() || !domain.trim()) {
+      toast("Enter a folder path and a domain", "alert");
+      return;
+    }
+    setLogs([]);
+    setReport(null);
+    setBusy(true);
+    streamImport(
+      { folder_path: path.trim(), domain: domain.trim(), shelves },
+      {
+        onLog: (m) => setLogs((prev) => [...prev, m]),
+        onReport: (r) => setReport(r),
+        onError: (m) => toast(m, "alert"),
+        onDone: () => {
+          setBusy(false);
+          onChanged();
+        },
+      },
+    );
+  };
+
+  return (
+    <div>
+      <div style={{ ...sectionLabelStyle, marginBottom: 10 }}>Import a structured folder</div>
+      <div style={cardStyle}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="Folder path on this machine, e.g. C:\corpora\retail\knowledge" style={inputStyle} />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <input value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="Domain (e.g. Retail)" style={{ ...inputStyle, maxWidth: 220 }} />
+            <select value={shelves} onChange={(e) => setShelves(e.target.value)} style={{ ...inputStyle, maxWidth: 260, cursor: "pointer" }}>
+              <option value="auto">Shelves: auto (AI groups by theme)</option>
+              <option value="single">Shelves: single</option>
+              <option value="priority">Shelves: by P0/P1/P2 priority</option>
+            </select>
+            <button onClick={run} disabled={busy} style={{ ...primaryBtnStyle, height: 40, opacity: busy ? 0.6 : 1 }}>
+              {busy ? "Importing…" : "Import"}
+            </button>
+          </div>
+        </div>
+        <div style={{ fontSize: 11.5, fontStyle: "italic", color: "var(--ink-faint)", marginTop: 10 }}>
+          Sub-folders become books, files become pages; the folder structure is preserved.
+        </div>
+
+        {logs.length > 0 && !report && (
+          <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--surface-sunk)", border: "1px solid var(--border)", borderRadius: 9, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--ink-muted)", maxHeight: 160, overflowY: "auto" }}>
+            {logs.slice(-8).map((l, i) => <div key={i}>{l}</div>)}
+          </div>
+        )}
+
+        {report && (
+          <div style={{ marginTop: 16, padding: "14px 16px", borderRadius: 11, border: "1px solid var(--border)", borderLeft: "3px solid var(--success)", background: "var(--success-weak)" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+              <span style={{ color: "var(--success)" }}><Icon name="check" size={15} /></span>
+              <strong style={{ fontSize: 13.5 }}>Imported into {report.domain}</strong>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--ink-muted)" }}>{report.shelves} shelves · {report.books} books · {report.pages} pages{report.skipped_pages ? ` · ${report.skipped_pages} skipped` : ""}</span>
+            </div>
+            <div style={{ fontSize: 12, color: "var(--ink-muted)" }}>
+              provided by source: <span style={{ fontFamily: "var(--mono)" }}>{report.provided.join(", ")}</span> · filled by import: <span style={{ fontFamily: "var(--mono)" }}>{report.missing.join(", ") || "nothing"}</span>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------- review queue
+
+function ReviewQueue({ onChanged, goLibrary }: { onChanged: () => void; goLibrary: () => void }) {
+  const toast = useToast();
+  const [rows, setRows] = useState<ReviewRow[] | null>(null);
+  const [edits, setEdits] = useState<Record<string, { domain: string; shelf: string }>>({});
+
+  const load = () => fetchReview().then(setRows).catch(() => setRows([]));
+  useEffect(() => {
+    load();
+  }, []);
+
+  const approve = async (r: ReviewRow) => {
+    const e = edits[r.id] ?? { domain: r.proposed_domain, shelf: r.proposed_shelf };
+    if (!e.domain.trim() || !e.shelf.trim()) {
+      toast("Enter a domain and shelf", "alert");
+      return;
+    }
+    try {
+      const path = await approveReview(r.id, e.domain.trim(), e.shelf.trim());
+      toast(`Filed under ${path}`, "check");
+      load();
+      onChanged();
+    } catch {
+      toast("Approve failed", "alert");
+    }
+  };
+
+  if (rows === null) return <div style={{ color: "var(--ink-faint)", fontSize: 13 }}>Loading…</div>;
+  if (rows.length === 0)
+    return (
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center", padding: "50px 20px", color: "var(--ink-faint)" }}>
+        <span style={{ color: "var(--border-strong)", marginBottom: 12 }}><Icon name="check" size={30} /></span>
+        <div style={{ fontFamily: "var(--serif)", fontSize: 16, color: "var(--ink-muted)" }}>Nothing to review</div>
+        <div style={{ fontFamily: "var(--serif)", fontStyle: "italic", fontSize: 13 }}>Confident ingests file themselves; unsure ones land here.</div>
+      </div>
+    );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      {rows.map((r) => {
+        const e = edits[r.id] ?? { domain: r.proposed_domain, shelf: r.proposed_shelf };
+        return (
+          <div key={r.id} style={cardStyle}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
+              <span style={{ color: "var(--page)" }}><Icon name="page" size={20} /></span>
+              <span style={{ fontFamily: "var(--mono)", fontSize: 13, fontWeight: 600 }}>{r.title}</span>
+              <span style={{ fontSize: 11.5, color: "var(--ink-faint)" }}>{r.n_pages} pages</span>
+              <span style={{ flex: 1 }} />
+              {r.confidence != null && <span style={badge("var(--warning)", "var(--warning-weak)")}>confidence {r.confidence.toFixed(2)}</span>}
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--ink-muted)", marginBottom: 12 }}>
+              Proposed <strong style={{ color: "var(--ink)" }}>{r.proposed_domain} ▸ {r.proposed_shelf}</strong>{r.rationale ? ` — ${r.rationale}` : ""}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+              <input value={e.domain} onChange={(ev) => setEdits((p) => ({ ...p, [r.id]: { ...e, domain: ev.target.value } }))} placeholder="Domain" style={{ ...inputStyle, height: 36, maxWidth: 180 }} />
+              <span style={{ color: "var(--ink-faint)" }}>▸</span>
+              <input value={e.shelf} onChange={(ev) => setEdits((p) => ({ ...p, [r.id]: { ...e, shelf: ev.target.value } }))} placeholder="Shelf" style={{ ...inputStyle, height: 36, maxWidth: 180 }} />
+              <button onClick={() => approve(r)} style={{ ...primaryBtnStyle, height: 36, padding: "0 14px", fontSize: 12.5 }}>
+                <Icon name="check" size={14} />
+                Approve
+              </button>
+            </div>
+          </div>
+        );
+      })}
+      <button onClick={goLibrary} style={{ ...actionBtnStyle, alignSelf: "flex-start" }}>Open the library →</button>
     </div>
   );
 }

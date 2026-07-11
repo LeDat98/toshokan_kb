@@ -86,6 +86,14 @@ Gemini 3.x rejects (400) a function-call turn echoed back without its `thought_s
 `_to_result`, re-attached in `_to_genai_contents`). It is bytes, not a genai type, so the
 boundary holds. Any future manual conversation replay must preserve it.
 
+## D-021 · 2026-07-12 · The API server must force UTF-8 stdout too (extends D-012)
+The uvicorn worker inherits the cp932 console, so structlog logging a library path with "▸"
+crashed the ingest request (UnicodeEncodeError surfaced as an SSE error event). `api/main.py`
+now reconfigures sys.stdout/stderr to UTF-8 at import, same as the CLI. /query didn't hit this
+because it never logs "▸"; classify does. Rule stands: every entry point forces UTF-8.
+Also: FastAPI's `File()`/`Form()`/`Depends()` in argument defaults is idiomatic → ruff B008 is
+per-file-ignored for `libkb/api/routes.py`.
+
 ## D-020 · 2026-07-12 · Imported-from-private-source domains are gitignored
 The retail corpus source (`Knowledge_Research-main/`) is private (user: don't push). Import COPIES
 it into `library/domains/retail/`, and `library/` markdown is normally git-tracked (D-002) — so the

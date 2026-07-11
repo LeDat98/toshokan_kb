@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import sys
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -10,6 +12,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from libkb.api.routes import router
 from libkb.config import get_settings
 from libkb.library.store import LibraryStore
+
+# The uvicorn worker inherits the console codepage (cp932 on this machine), which cannot encode
+# the "▸"/"·" that structlog writes when logging library paths. Force UTF-8 like the CLI (D-012).
+for _stream in (sys.stdout, sys.stderr):
+    with contextlib.suppress(AttributeError, ValueError):
+        _stream.reconfigure(encoding="utf-8")
 
 
 @asynccontextmanager

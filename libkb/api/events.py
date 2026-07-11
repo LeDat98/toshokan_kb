@@ -137,6 +137,73 @@ class PageModel(BaseModel):
         )
 
 
+class IngestStepEvent(BaseModel):
+    stage: str  # parse | split | classify | file
+    status: str  # running | done | gated | failed
+    detail: str = ""
+
+
+class IngestOutcomeModel(BaseModel):
+    status: str  # filed | uncatalogued
+    book_id: str
+    book_path: str
+    n_pages: int
+    gated: bool
+    confidence: float
+    proposed_path: str
+    rationale: str
+    source_type: str = ""
+
+    @classmethod
+    def of(cls, outcome) -> IngestOutcomeModel:
+        p = outcome.placement
+        return cls(
+            status=outcome.status,
+            book_id=outcome.book_id,
+            book_path=outcome.book_path,
+            n_pages=outcome.n_pages,
+            gated=outcome.gated,
+            confidence=p.confidence,
+            proposed_path=p.path,
+            rationale=p.rationale,
+            source_type=outcome.source_type,
+        )
+
+
+class ReviewRow(BaseModel):
+    id: str
+    title: str
+    n_pages: int
+    proposed_domain: str
+    proposed_shelf: str
+    confidence: float | None
+    rationale: str
+
+
+class ImportReportModel(BaseModel):
+    domain: str
+    shelves: int
+    books: int
+    pages: int
+    skipped_pages: int
+    provided: list[str]
+    missing: list[str]
+    paths: list[str]
+
+    @classmethod
+    def of(cls, report) -> ImportReportModel:
+        return cls(
+            domain=report.domain,
+            shelves=report.shelves,
+            books=report.books,
+            pages=report.pages,
+            skipped_pages=report.skipped_pages,
+            provided=report.provided,
+            missing=report.missing,
+            paths=report.paths,
+        )
+
+
 def sse(event: str, data: BaseModel | dict) -> str:
     payload = data.model_dump() if isinstance(data, BaseModel) else data
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"

@@ -1,8 +1,22 @@
-# STATE — as of 2026-07-12 (session 4)
+# STATE — as of 2026-07-12 (session 5)
 
-**Phase:** P1 ✅ + P2a (import) ✅ — the librarian walks BOTH the seed library and a real
-imported retail corpus. Next: P2b (document/PDF ingest with LLM placement + confidence gate),
-then P2c (question flywheel + card catalog).
+**Phase:** P1 ✅ + P2a (import) ✅ + P2b (document ingest) ✅. Next: P2c (question flywheel +
+card catalog + ask_librarian), then P3 (classifier/synthesis/eval), P4 (maintenance).
+
+## New this session — P2b document ingest (docs/INGEST.md, D-021)
+- `ingest/parse.py` (md/txt/pdf[pymupdf4llm]/html+url[trafilatura], lazy deps), `split.py`
+  (heading split + size fallback), `classify.py` (LLM top-down placement vs live tree,
+  reconciled, confidence), `pipeline.py` (parse→split→classify→file; gate→_uncatalogued;
+  list_uncatalogued + approve_placement). `libkb ingest <file|url> [--gate]`.
+- API: `POST /api/ingest` (multipart file / url / text, SSE stepper) + `POST /api/import`
+  (folder path, SSE) + `GET /api/ingest/review` + `POST /api/ingest/review/{id}/approve`.
+- **Ingest UI wired to real backend** (off mock): document upload/URL with a live 4-stage
+  stepper + outcome; folder-path import with strategy select + report; review queue with
+  approve (edit domain/shelf). web builds clean.
+- Verified live on gemini-3.5-flash: a Zero Trust doc → AI proposes NEW domain "Cybersecurity"
+  (filed at conf 0.90); with a high gate it parked in Uncatalogued, then approve moved it to
+  AI ▸ Security ▸ Zero Trust Architecture (confirmed in the tree). 55 unit tests green; ruff clean.
+- Fix D-021: uvicorn worker must force UTF-8 stdout (structlog logging "▸" crashed ingest).
 
 ## New this session — P2a import (docs/INGEST.md, D-019/D-020)
 - Ingest reframed as ONE pipeline (survey → DraftTree(provided/missing) → resolve gaps → commit).
@@ -33,14 +47,14 @@ then P2c (question flywheel + card catalog).
 - `./dev.sh` (Git Bash) — starts API on :8000 + vite on :5173, open http://localhost:5173.
   dev.sh now auto-detects the API and launches both. `./dev.sh check` = tests+lint+build.
 
-## Next actions (P2b — document ingest, then P2c)
-1. `ingest/parse.py` (pdf via pymupdf4llm, html/url via trafilatura) → markdown.
-2. `ingest/split.py` (structure-aware on headings; LLM page-splitting when unstructured).
-3. `ingest/classify.py` — top-down placement vs the live tree (create-if-missing), confidence
-   = min over levels, gate → `_uncatalogued`. Reuse the DraftTree + commit from P2a.
-4. `POST /api/ingest` SSE stepper; wire Ingest UI tab + review queue off mock.
-5. P2c: `ingest/questions.py` (vi+en) + `catalog/` (SQLite embeddings, search.lookup) +
-   `agent/tools.ask_librarian` + lookup shortcut in orchestrator.
+## Next actions (P2c — flywheel + catalog)
+1. `ingest/questions.py` — generate 3–5 vi+en questions per page (prompt gen_questions.md).
+   Hook it into `ingest/pipeline.py` + `ingest/importer.py` (after write_page).
+2. `catalog/` — SQLite (WAL): `db.py` schema (questions+embeddings), `store.py` add/remove,
+   `search.py` lookup (embed query, cosine over questions). `llm.embed` already works.
+3. `agent/tools.ask_librarian` (cap max_ask_librarian) → wire into navigator TOOL_SPECS.
+4. Lookup entry-point shortcut in orchestrator (catalog.lookup → navigate(entry_points)).
+5. Wire the page reader's "generated questions" + Observatory later (P3).
 
 ## Watch out
 - `web/src/api.ts` ↔ `libkb/api/events.py` are one contract — change both together (D-018).
@@ -51,5 +65,12 @@ then P2c (question flywheel + card catalog).
   a local import, `git checkout -- library/` before committing so only code/docs commit (D-020).
 - Retail domain is on disk but gitignored; to re-import fresh: delete `library/domains/retail/`
   then `libkb import ... --domain Retail --shelves auto`.
-- P2b document ingest should REUSE `ingest/models.DraftTree` + `ingest/importer.commit` — the
-  classifier just fills the domain/shelf/page-split slots the raw doc leaves missing.
+- P2b document ingest REUSES `ingest/importer.get_or_create` + write_page (done).
+- Parser deps (pymupdf4llm/trafilatura) are lazy-imported in parse.py — importing libkb.ingest
+  doesn't require them; only actual pdf/html ingest does.
+- Uncatalogued proposal is encoded in the parked book's description (`[proposed X ▸ Y · conf Z]`)
+  and parsed back by list_uncatalogued (regex). If you add structured node metadata, migrate this.
+- Windows port zombie: a killed uvicorn can leave port 8000 in LISTEN limbo (process gone,
+  taskkill "not found"); it clears on its own. If dev.sh can't bind 8000, wait or use another port.
+- The classify LLM call is slow (~11–20s). The ingest SSE "classify running" step sits there
+  during that call — expected, not a hang.
