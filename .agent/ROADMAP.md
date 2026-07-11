@@ -40,5 +40,10 @@ Phase details and rationale: `docs/ARCHITECTURE.md` §8. Function specs: `docs/F
 - [ ] Full Library explorer UI (miller columns, book view, page reader)
 
 ## Parallel track — UI
-- [ ] Mockup via Claude Design from `docs/UI_DESIGN_BRIEF.md` (user-driven)
-- [ ] Approved mockup → extract tokens/components → wire per phase (Ask→Ingest→Observatory→Library)
+- [x] Mockup via Claude Design from `docs/UI_DESIGN_BRIEF.md` (user-driven) — project
+  `LibraryKB UI Design Brief` (b5cfb445-fadd-435b-be2a-2b7b9857b10e), file `LibraryKB.dc.html`
+- [x] Implement design as `web/` app (2026-07-11): tokens light+dark, icon set, PathChip,
+  TracePanel (walk engine incl. backtrack/why, parallel branches, FOUND/NOT_FOUND), Library
+  miller columns + book/page reader, Ingest stepper + review queue, Observatory (KPIs,
+  trajectories + replay, eval chart, misroutes, fixes), toasts — all on `src/data/mock.ts`
+- [ ] Wire real backend per phase: Ask SSE (P1) → Library GETs (P1) → Ingest (P2) → Observatory (P3)

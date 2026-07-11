@@ -1,13 +1,13 @@
 {
-  "book_id": "nd_01KX80W5SKMK8RBCYHDNK0ZA2M",
+  "book_id": "nd_01KX82V9HNGGJTR5119YCGKVZJ",
   "chapters": [
     {
       "title": "Contents",
       "entries": [
         {
-          "page_id": "nd_01KX80W5T4EJZ15FBSSEZWQXZC",
+          "page_id": "nd_01KX82V9J5J51F73WMRY91VXBB",
           "title": "What is RAG",
-          "one_line": "Định nghĩa RAG, so sánh với fine-tuning, pipeline cơ bản",
+          "one_line": "RAG definition, comparison with fine-tuning, the basic pipeline",
           "keywords": [
             "retrieval-augmented generation",
             "grounding",
@@ -15,9 +15,9 @@
           ]
         },
         {
-          "page_id": "nd_01KX80W5TGFJ0W7AF5R0MZQND2",
+          "page_id": "nd_01KX82V9JMM46MRT6PQFDR9BE6",
           "title": "Chunking Strategies",
-          "one_line": "Chia tài liệu: fixed-size, theo cấu trúc, semantic; trade-off kích thước",
+          "one_line": "Splitting documents: fixed-size, structure-aware, semantic; size trade-offs",
           "keywords": [
             "chunking",
             "splitting",
@@ -26,9 +26,9 @@
           ]
         },
         {
-          "page_id": "nd_01KX80W5TWQ3V36N3HQ6JW1DQ9",
+          "page_id": "nd_01KX82V9K54G7CYJNVNXRFNSK8",
           "title": "Embeddings & Indexing",
-          "one_line": "Vector hoá, similarity, chỉ mục ANN (HNSW/IVF), lọc metadata",
+          "one_line": "Vectorization, similarity search, ANN indexes (HNSW/IVF), metadata filters",
           "keywords": [
             "embeddings",
             "vector index",

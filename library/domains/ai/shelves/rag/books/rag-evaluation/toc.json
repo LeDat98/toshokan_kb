@@ -1,13 +1,13 @@
 {
-  "book_id": "nd_01KX80W5X1ASKW7VDPK5H84EH9",
+  "book_id": "nd_01KX82V9NPFCSMM21WJS0KXTNG",
   "chapters": [
     {
       "title": "Contents",
       "entries": [
         {
-          "page_id": "nd_01KX80W5XFE077M8XSQBPKDBP3",
+          "page_id": "nd_01KX82V9P9JKWJERB3VDNXAY4F",
           "title": "Faithfulness & Relevance Metrics",
-          "one_line": "Đo câu trả lời có bám bằng chứng và đúng câu hỏi không; LLM-as-judge",
+          "one_line": "Is the answer grounded in evidence and on-question; LLM-as-judge caveats",
           "keywords": [
             "faithfulness",
             "relevance",
@@ -16,9 +16,9 @@
           ]
         },
         {
-          "page_id": "nd_01KX80W5XWEA126WK7W9S9YFFQ",
+          "page_id": "nd_01KX82V9PTZRVJQA57AXB0D30E",
           "title": "Building Evaluation Sets",
-          "one_line": "Sinh câu hỏi tổng hợp từ corpus, golden set, chạy regression",
+          "one_line": "Synthetic questions from the corpus, golden sets, regression runs",
           "keywords": [
             "eval set",
             "synthetic questions",

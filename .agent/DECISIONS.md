@@ -57,3 +57,18 @@ the uv references in D-002-era docs.
 The user's Windows console defaults to a legacy codepage (cp932) that cannot print "▸"/"·"
 used in citations and menus. `cli.main()` calls `sys.stdout.reconfigure(encoding="utf-8")`
 at startup. Any future entry point (API logs, scripts) must not assume console UTF-8.
+
+## D-013 · 2026-07-11 · UI copy is English-only
+User decision: no Vietnamese in the UI. Supersedes the "UI copy Vietnamese-first" part of
+D-009 (docs/code English + chat with the user in Vietnamese still stand). Seed page one-liners
+switched to English accordingly. The vi+en *generated questions* flywheel (D-005) is unaffected —
+that is retrieval data (user-vocabulary bridge), not UI chrome.
+
+## D-014 · 2026-07-11 · Frontend styling: CSS custom properties + typed inline styles (no Tailwind)
+The approved design (Claude Design project "LibraryKB UI Design Brief",
+b5cfb445-fadd-435b-be2a-2b7b9857b10e, file `LibraryKB.dc.html`) is authored entirely as design
+tokens + computed inline styles. Porting 1:1 preserves fidelity; re-authoring in Tailwind would
+be lossy and slower. So: tokens live in `web/src/tokens.css` (light+dark via `data-theme`),
+shared style factories in `web/src/ui.ts`, hover states as small utility classes. The design
+file is the styling source of truth — visual changes go through the Design project first.
+TanStack Query / openapi-typescript adoption deferred to P1 API wiring.

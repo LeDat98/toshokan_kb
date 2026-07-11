@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W5WKPD6DR0HG7AN6ZB2P
+id: nd_01KX82V9N88M982YYFNTMB6XAD
 title: Reranking & Cross-encoders
 source_ref: seed
 ---

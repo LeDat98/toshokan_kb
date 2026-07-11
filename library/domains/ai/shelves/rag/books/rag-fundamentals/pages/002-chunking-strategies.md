@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W5TGFJ0W7AF5R0MZQND2
+id: nd_01KX82V9JMM46MRT6PQFDR9BE6
 title: Chunking Strategies
 source_ref: seed
 ---

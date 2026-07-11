@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W612F3403K3TRCK66WZX
+id: nd_01KX82V9T8HZXEG748BBDT3PNS
 title: Few-shot Prompting
 source_ref: seed
 ---

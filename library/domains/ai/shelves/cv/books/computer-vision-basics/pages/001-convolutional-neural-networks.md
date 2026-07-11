@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W62ZX68MW4002EVF6WPJ
+id: nd_01KX82V9WM5V762A7XX8BWWBSP
 title: Convolutional Neural Networks
 source_ref: seed
 ---

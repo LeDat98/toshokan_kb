@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W5TWQ3V36N3HQ6JW1DQ9
+id: nd_01KX82V9K54G7CYJNVNXRFNSK8
 title: Embeddings & Indexing
 source_ref: seed
 ---

@@ -1,13 +1,13 @@
 {
-  "book_id": "nd_01KX80W5V9XY3Z71SVV5JRCCQ2",
+  "book_id": "nd_01KX82V9KRJ0DW27ZC53MJA16R",
   "chapters": [
     {
       "title": "Pre-retrieval",
       "entries": [
         {
-          "page_id": "nd_01KX80W5VVZJPN8SEK3YPM5MQH",
+          "page_id": "nd_01KX82V9MBH4B5PCZ84WWARN76",
           "title": "Query Rewriting & Expansion",
-          "one_line": "HyDE, multi-query, step-back — biến câu hỏi thành truy vấn tốt hơn",
+          "one_line": "HyDE, multi-query, step-back — turning questions into better queries",
           "keywords": [
             "query rewriting",
             "HyDE",
@@ -21,9 +21,9 @@
       "title": "Retrieval & Post-retrieval",
       "entries": [
         {
-          "page_id": "nd_01KX80W5W74W7SKJ5KE88Y18SN",
+          "page_id": "nd_01KX82V9MV6G67P6QQWJZKSS9J",
           "title": "Hybrid Search: BM25 + Dense",
-          "one_line": "Kết hợp lexical và semantic bằng RRF — bù trừ điểm yếu của nhau",
+          "one_line": "Combining lexical and semantic via RRF — each covers the other's blind spots",
           "keywords": [
             "hybrid search",
             "BM25",
@@ -32,9 +32,9 @@
           ]
         },
         {
-          "page_id": "nd_01KX80W5WKPD6DR0HG7AN6ZB2P",
+          "page_id": "nd_01KX82V9N88M982YYFNTMB6XAD",
           "title": "Reranking & Cross-encoders",
-          "one_line": "Sắp xếp lại top-k bằng cross-encoder — chính xác hơn, đắt hơn",
+          "one_line": "Re-scoring top-k with a cross-encoder — more accurate, more expensive",
           "keywords": [
             "reranking",
             "cross-encoder",

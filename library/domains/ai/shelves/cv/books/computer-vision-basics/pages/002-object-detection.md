@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W63CDY1FCBKFC2GT652J
+id: nd_01KX82V9X6S264Z1GVR4XPF2N5
 title: Object Detection
 source_ref: seed
 ---

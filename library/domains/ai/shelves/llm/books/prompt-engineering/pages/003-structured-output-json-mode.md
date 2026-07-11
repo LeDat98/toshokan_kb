@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W61X3FJM7FBX45W8EQFW
+id: nd_01KX82V9V8RX8ACTVTBQT69VV9
 title: Structured Output & JSON Mode
 source_ref: seed
 ---

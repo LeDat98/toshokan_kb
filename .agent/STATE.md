@@ -1,33 +1,34 @@
-# STATE — as of 2026-07-11 (end of session 1)
+# STATE — as of 2026-07-11 (end of session 2)
 
-**Phase:** P0 complete ✅ → next is P1 (walking skeleton)
+**Phase:** P0 complete ✅ · UI implemented on mock data ✅ → next is P1 (walking skeleton backend, then wire UI)
 
 ## What exists and works
-- Design docs (`docs/ARCHITECTURE.md`, `docs/FUNCTIONS.md`, `docs/UI_DESIGN_BRIEF.md`);
-  `.agent/` management layer; CLAUDE.md.
-- Backend scaffold, all green: `libkb/config.py`, `libkb/llm/client.py`
-  (generate / generate_json / embed / load_prompt, retry+logging),
-  `libkb/library/models.py` + `store.py` (fs tree, menus, TOC, pages, stats, see-also, move),
-  `libkb/seed.py` + `libkb/cli.py` (`init`, `seed`).
-- 25 unit tests + 2 real-API smoke tests pass; ruff clean.
-  **Verified live: `gemini-3.5-flash` and `gemini-embedding-001` work with the .env key.**
-- Demo library seeded at `library/`: AI → {RAG(3), LLM(2), CV(1)} = 6 books, 16 pages,
-  discriminative descriptions + one see-also (RAG → LLM).
-- venv at `.venv/` (python -m venv + pip, NO uv — D-011).
+- Backend P0 (commit `b7b0dfc`): config, Gemini client (validated live: `gemini-3.5-flash`,
+  `gemini-embedding-001`), fs LibraryStore, seed library (6 books / 16 pages, English one-liners),
+  CLI init/seed. 25 unit + 2 LLM smoke tests green, ruff clean.
+- **Frontend `web/`** (Vite + React + TS strict, builds clean): full implementation of the
+  approved Claude Design mockup — Ask (animated walk engine: staged reveal, backtrack + "why",
+  parallel synthesis branches, FOUND/NOT_FOUND terminals, stop, trace collapse), Library
+  (miller columns, book spines + sparklines, TOC reader, page reader + generated questions),
+  Ingest (dropzone, pipeline stepper, interactive classify w/ confidence gate, retry, review
+  queue), Observatory (KPIs, trajectories + trace replay, eval chart, misroutes, suggested
+  fixes w/ approve/dismiss), sidebar/topbar/theme toggle/toasts. All data from
+  `web/src/data/mock.ts`, which mirrors the future API contract.
+- Design source of truth: Claude Design project `LibraryKB UI Design Brief`
+  (b5cfb445-fadd-435b-be2a-2b7b9857b10e), file `LibraryKB.dc.html` (D-014).
 
-## Next actions (P1, in order — see ROADMAP)
-1. `agent/tools.py` — 7 navigator tools with hard budgets (hops/pages/librarian, visited-set).
-2. `agent/navigator.py` — isolated-context walk loop + `libkb ask --trace` end-to-end.
-3. `library/views.py` — rebuild_description/propagate_up (then run on seed library).
-4. `agent/answerer.py` + minimal orchestrator + `POST /api/query` SSE.
-5. Wire minimal Ask UI once the user's Claude Design mockup is approved (parallel track).
+## Next actions (P1)
+1. `agent/tools.py` — 7 navigator tools, hard budgets, visited-set (D-008).
+2. `agent/navigator.py` + `libkb ask --trace` end-to-end on the seed library.
+3. `library/views.py` (rebuild_description / propagate_up) — run once on seed.
+4. `answerer.py` + minimal orchestrator + `api/` `POST /api/query` SSE + `GET /api/library/*`.
+5. Swap `web/src/data/mock.ts` behind a real client for Ask + Library (vite proxy → :8000 ready).
 
 ## Blockers
-- None. Mockup (user-driven, in progress at Claude Design) only gates frontend wiring.
+- None.
 
 ## Watch out
-- `.env` var is `Gemini_API_Key` (odd casing) — Settings reads case-insensitively; don't "fix" it.
-- User's console codepage is cp932 → CLI reconfigures stdout to UTF-8 (D-012); any new entry
-  point must do the same before printing "▸"/"·".
-- Windows + no uv: invoke everything via `.venv\Scripts\python.exe -m …` (see CLAUDE.md commands).
-- pytest default filters out `-m llm` tests (addopts) — they cost tokens, run explicitly only.
+- Run frontend: `cd web && npm run dev` (or `npm run build` to verify). Node 25 present.
+- UI copy is English-only (D-013); no Tailwind — styling goes through tokens.css/ui.ts (D-014).
+- `.env` var casing, cp932 console, no-uv — see D-011/D-012 and session-1 notes.
+- pytest default excludes `-m llm` (token cost); run explicitly when needed.

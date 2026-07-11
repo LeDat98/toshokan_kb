@@ -11,7 +11,10 @@
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m ruff format --check .)",
       "PowerShell(.\\\\.venv\\\\Scripts\\\\libkb.exe seed)",
       "PowerShell(.\\\\.venv\\\\Scripts\\\\libkb.exe seed --force)",
-      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/llm -m llm -q)"
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/llm -m llm -q)",
+      "PowerShell($json = Get-Content 'C:\\\\Users\\\\dat.leduc\\\\.claude\\\\projects\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\tool-results\\\\toolu_01CkpcDjgUSXGapqbVM1rmNh.txt' -Raw | ConvertFrom-Json; $out = 'C:\\\\Users\\\\DAT~1.LED\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\scratchpad\\\\LibraryKB.dc.html'; [System.IO.File]::WriteAllText\\($out, $json.content, [System.Text.Encoding]::UTF8\\); \\(Get-Item $out\\).Length)",
+      "PowerShell(npm --version)",
+      "PowerShell($json = Get-Content 'C:\\\\Users\\\\dat.leduc\\\\.claude\\\\projects\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\tool-results\\\\toolu_01CkpcDjgUSXGapqbVM1rmNh.txt' -Raw -Encoding UTF8 | ConvertFrom-Json; $out = 'C:\\\\Users\\\\DAT~1.LED\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\scratchpad\\\\LibraryKB.dc.html'; [System.IO.File]::WriteAllText\\($out, $json.content, \\(New-Object System.Text.UTF8Encoding\\($false\\)\\)\\); \\(Get-Content $out -Encoding UTF8 | Measure-Object -Line\\).Lines)"
     ]
   }
 }

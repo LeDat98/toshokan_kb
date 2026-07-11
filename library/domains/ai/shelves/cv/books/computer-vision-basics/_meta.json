@@ -1,11 +1,11 @@
 {
-  "id": "nd_01KX80W62FX0R7QFD458E1XJFK",
+  "id": "nd_01KX82V9W0464WN55DKQDZC4R4",
   "kind": "book",
   "slug": "computer-vision-basics",
   "title": "Computer Vision Basics",
   "description": "CNNs and object detection fundamentals: filters, pooling, one- vs two-stage detectors.",
   "description_rev": 1,
-  "parent_id": "nd_01KX80W62A2Y6FNC7BA1NFTZ7A",
+  "parent_id": "nd_01KX82V9VR4S8N9JRXXJ95V979",
   "see_also": [],
   "stats": {
     "n_shelves": 0,
@@ -14,6 +14,6 @@
     "last_ingest_at": null
   },
   "uncatalogued": false,
-  "created_at": "2026-07-11T07:22:08.847913Z",
-  "updated_at": "2026-07-11T07:22:08.966470Z"
+  "created_at": "2026-07-11T07:56:37.120571Z",
+  "updated_at": "2026-07-11T07:56:37.251279Z"
 }

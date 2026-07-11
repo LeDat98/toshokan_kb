@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W61FTB07KJDFZXWQK5FK
+id: nd_01KX82V9TSG12P0BAJTJGQSNM2
 title: Chain-of-Thought
 source_ref: seed
 ---

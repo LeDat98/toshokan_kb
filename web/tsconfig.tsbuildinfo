@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/icons.tsx","./src/main.tsx","./src/ui.ts","./src/components/pathchip.tsx","./src/components/sparkline.tsx","./src/components/toast.tsx","./src/components/tracepanel.tsx","./src/data/mock.ts","./src/screens/ask.tsx","./src/screens/ingest.tsx","./src/screens/library.tsx","./src/screens/observatory.tsx"],"version":"5.6.3"}

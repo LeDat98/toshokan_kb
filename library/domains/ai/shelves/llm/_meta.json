@@ -1,11 +1,11 @@
 {
-  "id": "nd_01KX80W5Y8WM2E9FRE7ZZEHQ4R",
+  "id": "nd_01KX82V9QA507ZS7QYTK93BRJ2",
   "kind": "shelf",
   "slug": "llm",
   "title": "LLM",
   "description": "Large language models themselves: transformer architecture, attention, scaling laws, and prompting techniques. Does NOT cover document retrieval pipelines — see the RAG shelf.",
   "description_rev": 1,
-  "parent_id": "nd_01KX80W5S4KZMCFYKBZ25ZTT18",
+  "parent_id": "nd_01KX82V9H4YGCC2M2PTGYYRCKD",
   "see_also": [],
   "stats": {
     "n_shelves": 0,
@@ -14,6 +14,6 @@
     "last_ingest_at": null
   },
   "uncatalogued": false,
-  "created_at": "2026-07-11T07:22:08.712863Z",
-  "updated_at": "2026-07-11T07:22:08.958010Z"
+  "created_at": "2026-07-11T07:56:36.970062Z",
+  "updated_at": "2026-07-11T07:56:37.242277Z"
 }

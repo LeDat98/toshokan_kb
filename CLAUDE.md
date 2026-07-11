@@ -35,4 +35,4 @@ TOC → page to answer, instead of one-shot vector similarity. Founding requirem
 
 ## Language
 Durable artifacts (code/docs/commits) in English; converse with the user in Vietnamese;
-UI copy Vietnamese-first.
+**UI copy English-only (D-013)**. Generated questions stay vi+en (retrieval data, not UI).

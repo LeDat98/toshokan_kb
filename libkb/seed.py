@@ -38,7 +38,7 @@ SEED: dict = {
                                     [
                                         {
                                             "title": "What is RAG",
-                                            "one_line": "Định nghĩa RAG, so sánh với fine-tuning, pipeline cơ bản",
+                                            "one_line": "RAG definition, comparison with fine-tuning, the basic pipeline",
                                             "keywords": [
                                                 "retrieval-augmented generation",
                                                 "grounding",
@@ -59,7 +59,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Chunking Strategies",
-                                            "one_line": "Chia tài liệu: fixed-size, theo cấu trúc, semantic; trade-off kích thước",
+                                            "one_line": "Splitting documents: fixed-size, structure-aware, semantic; size trade-offs",
                                             "keywords": [
                                                 "chunking",
                                                 "splitting",
@@ -81,7 +81,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Embeddings & Indexing",
-                                            "one_line": "Vector hoá, similarity, chỉ mục ANN (HNSW/IVF), lọc metadata",
+                                            "one_line": "Vectorization, similarity search, ANN indexes (HNSW/IVF), metadata filters",
                                             "keywords": [
                                                 "embeddings",
                                                 "vector index",
@@ -117,7 +117,7 @@ SEED: dict = {
                                     [
                                         {
                                             "title": "Query Rewriting & Expansion",
-                                            "one_line": "HyDE, multi-query, step-back — biến câu hỏi thành truy vấn tốt hơn",
+                                            "one_line": "HyDE, multi-query, step-back — turning questions into better queries",
                                             "keywords": [
                                                 "query rewriting",
                                                 "HyDE",
@@ -144,7 +144,7 @@ SEED: dict = {
                                     [
                                         {
                                             "title": "Hybrid Search: BM25 + Dense",
-                                            "one_line": "Kết hợp lexical và semantic bằng RRF — bù trừ điểm yếu của nhau",
+                                            "one_line": "Combining lexical and semantic via RRF — each covers the other's blind spots",
                                             "keywords": [
                                                 "hybrid search",
                                                 "BM25",
@@ -164,7 +164,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Reranking & Cross-encoders",
-                                            "one_line": "Sắp xếp lại top-k bằng cross-encoder — chính xác hơn, đắt hơn",
+                                            "one_line": "Re-scoring top-k with a cross-encoder — more accurate, more expensive",
                                             "keywords": [
                                                 "reranking",
                                                 "cross-encoder",
@@ -202,7 +202,7 @@ SEED: dict = {
                                     [
                                         {
                                             "title": "Faithfulness & Relevance Metrics",
-                                            "one_line": "Đo câu trả lời có bám bằng chứng và đúng câu hỏi không; LLM-as-judge",
+                                            "one_line": "Is the answer grounded in evidence and on-question; LLM-as-judge caveats",
                                             "keywords": [
                                                 "faithfulness",
                                                 "relevance",
@@ -223,7 +223,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Building Evaluation Sets",
-                                            "one_line": "Sinh câu hỏi tổng hợp từ corpus, golden set, chạy regression",
+                                            "one_line": "Synthetic questions from the corpus, golden sets, regression runs",
                                             "keywords": [
                                                 "eval set",
                                                 "synthetic questions",
@@ -288,7 +288,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Attention Mechanism",
-                                            "one_line": "QKV, scaled dot-product, multi-head, và vì sao cần KV cache",
+                                            "one_line": "QKV, scaled dot-product, multi-head, and why the KV cache exists",
                                             "keywords": [
                                                 "attention",
                                                 "QKV",
@@ -309,7 +309,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Scaling Laws",
-                                            "one_line": "Quan hệ loss–params–data–compute; bài học Chinchilla",
+                                            "one_line": "The loss–params–data–compute relationship; the Chinchilla lesson",
                                             "keywords": [
                                                 "scaling laws",
                                                 "Chinchilla",
@@ -343,7 +343,7 @@ SEED: dict = {
                                     [
                                         {
                                             "title": "Few-shot Prompting",
-                                            "one_line": "Zero/few-shot, chọn ví dụ, thứ tự và format của demos",
+                                            "one_line": "Zero/few-shot, example selection, ordering and format of demos",
                                             "keywords": [
                                                 "few-shot",
                                                 "in-context learning",
@@ -362,7 +362,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Chain-of-Thought",
-                                            "one_line": "Cho model suy luận từng bước; khi nào giúp và khi nào chỉ tốn token",
+                                            "one_line": "Step-by-step reasoning; when it helps and when it just burns tokens",
                                             "keywords": [
                                                 "chain-of-thought",
                                                 "reasoning",
@@ -381,7 +381,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Structured Output & JSON Mode",
-                                            "one_line": "Ép output theo schema, constrained decoding, retry khi invalid",
+                                            "one_line": "Schema-constrained output, constrained decoding, retry on invalid",
                                             "keywords": [
                                                 "structured output",
                                                 "JSON schema",
@@ -420,7 +420,7 @@ SEED: dict = {
                                     [
                                         {
                                             "title": "Convolutional Neural Networks",
-                                            "one_line": "Filter tích chập, pooling, phân cấp đặc trưng từ cạnh đến vật thể",
+                                            "one_line": "Convolution filters, pooling, feature hierarchy from edges to objects",
                                             "keywords": [
                                                 "CNN",
                                                 "convolution",
@@ -440,7 +440,7 @@ SEED: dict = {
                                         },
                                         {
                                             "title": "Object Detection",
-                                            "one_line": "Two-stage vs one-stage (YOLO), IoU, NMS — định vị và phân loại cùng lúc",
+                                            "one_line": "Two-stage vs one-stage (YOLO), IoU, NMS — localize and classify at once",
                                             "keywords": ["object detection", "YOLO", "IoU", "NMS"],
                                             "content": (
                                                 "Detection outputs bounding boxes plus class labels. **Two-stage** detectors (Faster\n"

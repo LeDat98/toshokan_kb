@@ -1,0 +1,207 @@
+/* Design tokens — ported verbatim from LibraryKB.dc.html (Claude Design project). */
+:root {
+  --sans: "IBM Plex Sans", system-ui, sans-serif;
+  --serif: "Spectral", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, monospace;
+  --surface: #f4f0e8;
+  --surface-raised: #fffdf8;
+  --surface-sunk: #ebe6db;
+  --surface-hover: #efeae0;
+  --ink: #23211b;
+  --ink-muted: #726c60;
+  --ink-faint: #9d968a;
+  --border: #e2dccf;
+  --border-strong: #cfc7b6;
+  --accent: #1e6a56;
+  --accent-deep: #175344;
+  --accent-weak: #e2efe9;
+  --accent-ink: #ffffff;
+  --walk: #b57619;
+  --walk-weak: #f5e9d2;
+  --walk-done: #1e6a56;
+  --walk-reject: #a49d90;
+  --success: #2c855c;
+  --success-weak: #e0efe6;
+  --warning: #a9781a;
+  --warning-weak: #f6ecd6;
+  --danger: #b0402e;
+  --danger-weak: #f5e3de;
+  --info: #3767a0;
+  --info-weak: #e3ebf4;
+  --domain: #5a52a4;
+  --shelf: #2c8172;
+  --book: #a06b26;
+  --page: #566a84;
+  --shadow-sm: 0 1px 2px rgba(40, 34, 20, 0.06), 0 1px 3px rgba(40, 34, 20, 0.05);
+  --shadow-md: 0 2px 6px rgba(40, 34, 20, 0.07), 0 8px 24px rgba(40, 34, 20, 0.07);
+  --shadow-lg: 0 8px 40px rgba(40, 34, 20, 0.14);
+}
+:root[data-theme="dark"] {
+  --surface: #191712;
+  --surface-raised: #221f18;
+  --surface-sunk: #131009;
+  --surface-hover: #2a261e;
+  --ink: #efe9db;
+  --ink-muted: #a49d8d;
+  --ink-faint: #736c5e;
+  --border: #322d24;
+  --border-strong: #453f33;
+  --accent: #46a488;
+  --accent-deep: #5cb89b;
+  --accent-weak: #1c2b26;
+  --accent-ink: #0c1611;
+  --walk: #e0a94a;
+  --walk-weak: #2e2612;
+  --walk-done: #46a488;
+  --walk-reject: #6a6355;
+  --success: #4aa578;
+  --success-weak: #16271e;
+  --warning: #cf9a34;
+  --warning-weak: #2a2210;
+  --danger: #d5644f;
+  --danger-weak: #2b1611;
+  --info: #6c9bd0;
+  --info-weak: #15202b;
+  --domain: #8981d4;
+  --shelf: #4ba392;
+  --book: #c9974f;
+  --page: #8496b2;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 2px 8px rgba(0, 0, 0, 0.35), 0 12px 30px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 46px rgba(0, 0, 0, 0.5);
+}
+
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font-family: var(--sans);
+  background: var(--surface);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-deep);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 6px;
+  border: 3px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+textarea,
+input,
+button {
+  font-family: inherit;
+}
+
+@keyframes stepIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes lamp {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 0 var(--walk-weak),
+      0 0 0 0 rgba(181, 118, 25, 0);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px var(--walk-weak),
+      0 0 14px 2px rgba(181, 118, 25, 0.5);
+  }
+}
+@keyframes lampDark {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(224, 169, 74, 0.15);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(224, 169, 74, 0.12),
+      0 0 16px 3px rgba(224, 169, 74, 0.4);
+  }
+}
+@keyframes checkPop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.15);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@keyframes floaty {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes toastIn {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* hover states (inline styles can't express pseudo-classes) */
+.h-border-accent:hover {
+  border-color: var(--accent) !important;
+}
+.h-bg-hover:hover {
+  background: var(--surface-hover) !important;
+}
+.h-bg-sunk:hover {
+  background: var(--surface-sunk) !important;
+}
+.h-accent-deep:hover {
+  background: var(--accent-deep) !important;
+}
+.h-raise:hover {
+  transform: translateY(-1px);
+}
+.h-chip:hover {
+  border-color: var(--accent) !important;
+  background: var(--accent-weak) !important;
+}

@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W604YAV70HZ6D49SHRT3
+id: nd_01KX82V9S43F90QZDJ2HAJ4WA3
 title: Scaling Laws
 source_ref: seed
 ---

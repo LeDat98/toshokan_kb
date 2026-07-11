@@ -1,15 +1,15 @@
 {
-  "id": "nd_01KX80W5SCPYMJX57749N3PEPB",
+  "id": "nd_01KX82V9HDAANS60MBR2GEHJJY",
   "kind": "shelf",
   "slug": "rag",
   "title": "RAG",
   "description": "Retrieval-Augmented Generation: pipelines that fetch external knowledge before generating — chunking, indexing, retrieval, reranking, evaluation. Does NOT cover base model architecture or prompting — see the LLM shelf.",
   "description_rev": 1,
-  "parent_id": "nd_01KX80W5S4KZMCFYKBZ25ZTT18",
+  "parent_id": "nd_01KX82V9H4YGCC2M2PTGYYRCKD",
   "see_also": [
     {
       "target": {
-        "id": "nd_01KX80W5Y8WM2E9FRE7ZZEHQ4R",
+        "id": "nd_01KX82V9QA507ZS7QYTK93BRJ2",
         "kind": "shelf",
         "title": "LLM",
         "slug": "llm"
@@ -25,6 +25,6 @@
     "last_ingest_at": null
   },
   "uncatalogued": false,
-  "created_at": "2026-07-11T07:22:08.556528Z",
-  "updated_at": "2026-07-11T07:22:08.932460Z"
+  "created_at": "2026-07-11T07:56:36.781865Z",
+  "updated_at": "2026-07-11T07:56:37.218017Z"
 }

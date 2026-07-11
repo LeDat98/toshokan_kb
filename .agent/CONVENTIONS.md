@@ -24,13 +24,19 @@ Changes to this file require a `DECISIONS.md` entry.
 - Money guard: any code path that can spend >~50 LLM calls in one action must take an explicit
   `budget`/`sample` parameter with a safe default.
 
-## TypeScript (frontend, from P1)
-- Vite + React + TS `strict`; Tailwind. Components: function components only, named exports
-  (default export only for route pages).
-- Server state via TanStack Query; SSE handled in one `useQueryStream` hook shared by Ask/Ingest.
-- API types generated from FastAPI OpenAPI (`openapi-typescript`) — no hand-written mirrors.
-- Components follow the shared inventory in `docs/UI_DESIGN_BRIEF.md` §8 (PathChip, TraceStep…);
+## TypeScript (frontend)
+- Vite + React + TS `strict`. Components: function components only, named exports
+  (default export only for `App`).
+- Styling (D-014): design tokens in `web/src/tokens.css`, typed style factories in
+  `web/src/ui.ts`, inline `CSSProperties` ported from the design file; hover via the small
+  `.h-*` utility classes. **No Tailwind.** Visual changes go through the Claude Design project
+  first — the design file is the styling source of truth.
+- Data: `web/src/data/mock.ts` mirrors the future API contract; when P1 API lands, swap behind
+  the same types (then adopt TanStack Query + `openapi-typescript`; SSE in one `useQueryStream`
+  hook shared by Ask/Ingest).
+- Components follow the shared inventory in `docs/UI_DESIGN_BRIEF.md` §8 (PathChip, TracePanel…);
   one component per file under `web/src/components/`.
+- UI copy: English only (D-013).
 
 ## Git
 - Conventional commits: `feat: | fix: | docs: | refactor: | test: | chore:`, imperative, ≤ 72 chars

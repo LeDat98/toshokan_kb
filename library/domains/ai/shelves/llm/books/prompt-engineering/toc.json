@@ -1,13 +1,13 @@
 {
-  "book_id": "nd_01KX80W60JTHB0KV4HXACRAERK",
+  "book_id": "nd_01KX82V9SP8W74CBVFCNVY7GK9",
   "chapters": [
     {
       "title": "Contents",
       "entries": [
         {
-          "page_id": "nd_01KX80W612F3403K3TRCK66WZX",
+          "page_id": "nd_01KX82V9T8HZXEG748BBDT3PNS",
           "title": "Few-shot Prompting",
-          "one_line": "Zero/few-shot, chọn ví dụ, thứ tự và format của demos",
+          "one_line": "Zero/few-shot, example selection, ordering and format of demos",
           "keywords": [
             "few-shot",
             "in-context learning",
@@ -15,9 +15,9 @@
           ]
         },
         {
-          "page_id": "nd_01KX80W61FTB07KJDFZXWQK5FK",
+          "page_id": "nd_01KX82V9TSG12P0BAJTJGQSNM2",
           "title": "Chain-of-Thought",
-          "one_line": "Cho model suy luận từng bước; khi nào giúp và khi nào chỉ tốn token",
+          "one_line": "Step-by-step reasoning; when it helps and when it just burns tokens",
           "keywords": [
             "chain-of-thought",
             "reasoning",
@@ -25,9 +25,9 @@
           ]
         },
         {
-          "page_id": "nd_01KX80W61X3FJM7FBX45W8EQFW",
+          "page_id": "nd_01KX82V9V8RX8ACTVTBQT69VV9",
           "title": "Structured Output & JSON Mode",
-          "one_line": "Ép output theo schema, constrained decoding, retry khi invalid",
+          "one_line": "Schema-constrained output, constrained decoding, retry on invalid",
           "keywords": [
             "structured output",
             "JSON schema",

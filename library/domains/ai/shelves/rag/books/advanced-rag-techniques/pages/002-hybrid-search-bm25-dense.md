@@ -1,5 +1,5 @@
 ---
-id: nd_01KX80W5W74W7SKJ5KE88Y18SN
+id: nd_01KX82V9MV6G67P6QQWJZKSS9J
 title: Hybrid Search: BM25 + Dense
 source_ref: seed
 ---
