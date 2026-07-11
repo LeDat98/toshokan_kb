@@ -1,0 +1,19 @@
+{
+  "id": "nd_01KX80W60JTHB0KV4HXACRAERK",
+  "kind": "book",
+  "slug": "prompt-engineering",
+  "title": "Prompt Engineering",
+  "description": "Getting better outputs at inference time: few-shot examples, chain-of-thought, structured JSON output. Model internals are NOT here — see LLM Foundations.",
+  "description_rev": 1,
+  "parent_id": "nd_01KX80W5Y8WM2E9FRE7ZZEHQ4R",
+  "see_also": [],
+  "stats": {
+    "n_shelves": 0,
+    "n_books": 0,
+    "n_pages": 3,
+    "last_ingest_at": null
+  },
+  "uncatalogued": false,
+  "created_at": "2026-07-11T07:22:08.786646Z",
+  "updated_at": "2026-07-11T07:22:08.950348Z"
+}

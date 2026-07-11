@@ -1,0 +1,42 @@
+{
+  "book_id": "nd_01KX80W5YEMCTTYM6EXQKBWHQS",
+  "chapters": [
+    {
+      "title": "Contents",
+      "entries": [
+        {
+          "page_id": "nd_01KX80W5YV27ZZCD7GFZAGS63Z",
+          "title": "Transformer Architecture",
+          "one_line": "Decoder-only stack: embedding, attention + MLP blocks, residual, LN",
+          "keywords": [
+            "transformer",
+            "decoder-only",
+            "residual",
+            "layer norm"
+          ]
+        },
+        {
+          "page_id": "nd_01KX80W5Z8Y0R9EWXJD0QR6ZT6",
+          "title": "Attention Mechanism",
+          "one_line": "QKV, scaled dot-product, multi-head, và vì sao cần KV cache",
+          "keywords": [
+            "attention",
+            "QKV",
+            "multi-head",
+            "KV cache"
+          ]
+        },
+        {
+          "page_id": "nd_01KX80W604YAV70HZ6D49SHRT3",
+          "title": "Scaling Laws",
+          "one_line": "Quan hệ loss–params–data–compute; bài học Chinchilla",
+          "keywords": [
+            "scaling laws",
+            "Chinchilla",
+            "compute-optimal"
+          ]
+        }
+      ]
+    }
+  ]
+}

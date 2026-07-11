@@ -1,0 +1,19 @@
+{
+  "id": "nd_uncatalogued",
+  "kind": "shelf",
+  "slug": "uncatalogued",
+  "title": "Uncatalogued",
+  "description": "New arrivals whose classification confidence was below the gate. They wait here for review — nothing gets force-filed.",
+  "description_rev": 0,
+  "parent_id": "nd_root",
+  "see_also": [],
+  "stats": {
+    "n_shelves": 0,
+    "n_books": 0,
+    "n_pages": 0,
+    "last_ingest_at": null
+  },
+  "uncatalogued": true,
+  "created_at": "2026-07-11T07:22:08.526187Z",
+  "updated_at": "2026-07-11T07:22:08.897191Z"
+}

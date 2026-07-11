@@ -1,0 +1,19 @@
+{
+  "id": "nd_01KX80W5S4KZMCFYKBZ25ZTT18",
+  "kind": "domain",
+  "slug": "ai",
+  "title": "AI",
+  "description": "Artificial intelligence: machine learning, large language models, retrieval systems and computer vision. Software engineering topics live elsewhere.",
+  "description_rev": 1,
+  "parent_id": "nd_root",
+  "see_also": [],
+  "stats": {
+    "n_shelves": 3,
+    "n_books": 6,
+    "n_pages": 16,
+    "last_ingest_at": null
+  },
+  "uncatalogued": false,
+  "created_at": "2026-07-11T07:22:08.548432Z",
+  "updated_at": "2026-07-11T07:22:08.986581Z"
+}

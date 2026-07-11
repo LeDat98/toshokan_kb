@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(git init)",
+      "PowerShell(uv --version)",
+      "PowerShell(python --version)",
+      "PowerShell(git config user.name)",
+      "PowerShell(git config user.email)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest -q)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m ruff check .)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m ruff format --check .)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\libkb.exe seed)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\libkb.exe seed --force)",
+      "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/llm -m llm -q)"
+    ]
+  }
+}

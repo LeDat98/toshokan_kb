@@ -1,0 +1,19 @@
+{
+  "id": "nd_01KX80W5YEMCTTYM6EXQKBWHQS",
+  "kind": "book",
+  "slug": "llm-foundations",
+  "title": "LLM Foundations",
+  "description": "How LLMs work inside: transformer blocks, the attention mechanism, and scaling laws. Applied prompting is NOT here — see Prompt Engineering.",
+  "description_rev": 1,
+  "parent_id": "nd_01KX80W5Y8WM2E9FRE7ZZEHQ4R",
+  "see_also": [],
+  "stats": {
+    "n_shelves": 0,
+    "n_books": 0,
+    "n_pages": 3,
+    "last_ingest_at": null
+  },
+  "uncatalogued": false,
+  "created_at": "2026-07-11T07:22:08.718113Z",
+  "updated_at": "2026-07-11T07:22:08.942349Z"
+}

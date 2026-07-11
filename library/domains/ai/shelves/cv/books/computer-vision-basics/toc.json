@@ -1,0 +1,32 @@
+{
+  "book_id": "nd_01KX80W62FX0R7QFD458E1XJFK",
+  "chapters": [
+    {
+      "title": "Contents",
+      "entries": [
+        {
+          "page_id": "nd_01KX80W62ZX68MW4002EVF6WPJ",
+          "title": "Convolutional Neural Networks",
+          "one_line": "Filter tích chập, pooling, phân cấp đặc trưng từ cạnh đến vật thể",
+          "keywords": [
+            "CNN",
+            "convolution",
+            "pooling",
+            "feature hierarchy"
+          ]
+        },
+        {
+          "page_id": "nd_01KX80W63CDY1FCBKFC2GT652J",
+          "title": "Object Detection",
+          "one_line": "Two-stage vs one-stage (YOLO), IoU, NMS — định vị và phân loại cùng lúc",
+          "keywords": [
+            "object detection",
+            "YOLO",
+            "IoU",
+            "NMS"
+          ]
+        }
+      ]
+    }
+  ]
+}

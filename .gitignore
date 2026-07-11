@@ -1,0 +1,27 @@
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node / frontend
+node_modules/
+web/dist/
+
+# Runtime data (binary / regenerable)
+library/_catalog/*.db
+library/_catalog/*.db-*
+*.sqlite3
+logs/
+.cache/
+
+# OS / IDE
+.DS_Store
+Thumbs.db

@@ -1,0 +1,48 @@
+{
+  "book_id": "nd_01KX80W5V9XY3Z71SVV5JRCCQ2",
+  "chapters": [
+    {
+      "title": "Pre-retrieval",
+      "entries": [
+        {
+          "page_id": "nd_01KX80W5VVZJPN8SEK3YPM5MQH",
+          "title": "Query Rewriting & Expansion",
+          "one_line": "HyDE, multi-query, step-back — biến câu hỏi thành truy vấn tốt hơn",
+          "keywords": [
+            "query rewriting",
+            "HyDE",
+            "multi-query",
+            "step-back prompting"
+          ]
+        }
+      ]
+    },
+    {
+      "title": "Retrieval & Post-retrieval",
+      "entries": [
+        {
+          "page_id": "nd_01KX80W5W74W7SKJ5KE88Y18SN",
+          "title": "Hybrid Search: BM25 + Dense",
+          "one_line": "Kết hợp lexical và semantic bằng RRF — bù trừ điểm yếu của nhau",
+          "keywords": [
+            "hybrid search",
+            "BM25",
+            "reciprocal rank fusion",
+            "lexical"
+          ]
+        },
+        {
+          "page_id": "nd_01KX80W5WKPD6DR0HG7AN6ZB2P",
+          "title": "Reranking & Cross-encoders",
+          "one_line": "Sắp xếp lại top-k bằng cross-encoder — chính xác hơn, đắt hơn",
+          "keywords": [
+            "reranking",
+            "cross-encoder",
+            "bi-encoder",
+            "two-stage retrieval"
+          ]
+        }
+      ]
+    }
+  ]
+}

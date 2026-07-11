@@ -1,0 +1,43 @@
+{
+  "book_id": "nd_01KX80W5SKMK8RBCYHDNK0ZA2M",
+  "chapters": [
+    {
+      "title": "Contents",
+      "entries": [
+        {
+          "page_id": "nd_01KX80W5T4EJZ15FBSSEZWQXZC",
+          "title": "What is RAG",
+          "one_line": "Định nghĩa RAG, so sánh với fine-tuning, pipeline cơ bản",
+          "keywords": [
+            "retrieval-augmented generation",
+            "grounding",
+            "hallucination"
+          ]
+        },
+        {
+          "page_id": "nd_01KX80W5TGFJ0W7AF5R0MZQND2",
+          "title": "Chunking Strategies",
+          "one_line": "Chia tài liệu: fixed-size, theo cấu trúc, semantic; trade-off kích thước",
+          "keywords": [
+            "chunking",
+            "splitting",
+            "overlap",
+            "chunk size"
+          ]
+        },
+        {
+          "page_id": "nd_01KX80W5TWQ3V36N3HQ6JW1DQ9",
+          "title": "Embeddings & Indexing",
+          "one_line": "Vector hoá, similarity, chỉ mục ANN (HNSW/IVF), lọc metadata",
+          "keywords": [
+            "embeddings",
+            "vector index",
+            "HNSW",
+            "ANN",
+            "cosine similarity"
+          ]
+        }
+      ]
+    }
+  ]
+}
