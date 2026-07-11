@@ -32,6 +32,34 @@ _EMBED_BATCH = 100
 class ToolCall:
     name: str
     args: dict[str, Any]
+    # Opaque Gemini "thought signature" (bytes) that MUST be echoed back with the
+    # function-call turn or the API rejects the next request (400). Not a genai type.
+    thought_signature: Any = None
+
+
+@dataclass
+class ToolSpec:
+    """A function the model may call. `parameters` is a JSON-schema object."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+
+
+@dataclass
+class ToolResponse:
+    name: str
+    response: dict[str, Any]
+
+
+@dataclass
+class Turn:
+    """One conversation turn in the neutral (genai-free) message format."""
+
+    role: str  # "user" | "model" | "tool"
+    text: str | None = None
+    tool_calls: list[ToolCall] | None = None
+    tool_responses: list[ToolResponse] | None = None
 
 
 @dataclass
@@ -57,11 +85,11 @@ class LLM:
 
     def generate(
         self,
-        contents: Any,
+        contents: str | list[Turn],
         *,
         model: str | None = None,
         system: str | None = None,
-        tools: list[Any] | None = None,
+        tools: list[ToolSpec] | None = None,
         json_schema: Any | None = None,
         temperature: float = 0.2,
         max_retries: int = 3,
@@ -71,18 +99,23 @@ class LLM:
         if system:
             config.system_instruction = system
         if tools:
-            config.tools = tools
+            config.tools = _to_genai_tools(tools)
+            # we handle the tool loop ourselves (budgets, events, isolated context)
+            config.automatic_function_calling = genai_types.AutomaticFunctionCallingConfig(
+                disable=True
+            )
         if json_schema is not None:
             config.response_mime_type = "application/json"
             config.response_schema = json_schema
 
+        genai_contents = _to_genai_contents(contents)
         delay = 1.0
         last_exc: Exception | None = None
         for attempt in range(max_retries + 1):
             start = time.monotonic()
             try:
                 response = self._client.models.generate_content(
-                    model=model, contents=contents, config=config
+                    model=model, contents=genai_contents, config=config
                 )
                 return self._to_result(response, model, int((time.monotonic() - start) * 1000))
             except genai_errors.APIError as exc:
@@ -166,10 +199,21 @@ class LLM:
         return text
 
     def _to_result(self, response: Any, model: str, latency_ms: int) -> LLMResult:
-        tool_calls = [
-            ToolCall(name=fc.name, args=dict(fc.args or {}))
-            for fc in (response.function_calls or [])
-        ]
+        # iterate parts (not response.function_calls) so we can capture each call's
+        # thought_signature, which must be echoed back on the next turn (Gemini 3+)
+        tool_calls: list[ToolCall] = []
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate and candidate.content and candidate.content.parts:
+            for part in candidate.content.parts:
+                if getattr(part, "function_call", None):
+                    fc = part.function_call
+                    tool_calls.append(
+                        ToolCall(
+                            name=fc.name,
+                            args=dict(fc.args or {}),
+                            thought_signature=getattr(part, "thought_signature", None),
+                        )
+                    )
         text = None if tool_calls else response.text
         meta = response.usage_metadata
         usage = Usage(
@@ -187,6 +231,82 @@ class LLM:
             tool_calls=len(tool_calls),
         )
         return LLMResult(text=text, tool_calls=tool_calls, usage=usage)
+
+
+# --------------------------------------------------- neutral → genai translation
+
+_SCHEMA_TYPES = {
+    "object": "OBJECT",
+    "string": "STRING",
+    "array": "ARRAY",
+    "integer": "INTEGER",
+    "number": "NUMBER",
+    "boolean": "BOOLEAN",
+}
+
+
+def _to_genai_schema(node: dict[str, Any]) -> genai_types.Schema:
+    kind = node.get("type", "string")
+    kwargs: dict[str, Any] = {"type": _SCHEMA_TYPES.get(kind, "STRING")}
+    if "description" in node:
+        kwargs["description"] = node["description"]
+    if "enum" in node:
+        kwargs["enum"] = node["enum"]
+    if kind == "object":
+        kwargs["properties"] = {
+            key: _to_genai_schema(sub) for key, sub in node.get("properties", {}).items()
+        }
+        if node.get("required"):
+            kwargs["required"] = node["required"]
+    if kind == "array" and "items" in node:
+        kwargs["items"] = _to_genai_schema(node["items"])
+    return genai_types.Schema(**kwargs)
+
+
+def _to_genai_tools(tools: list[ToolSpec]) -> list[genai_types.Tool]:
+    declarations = [
+        genai_types.FunctionDeclaration(
+            name=spec.name,
+            description=spec.description,
+            parameters=_to_genai_schema(spec.parameters),
+        )
+        for spec in tools
+    ]
+    return [genai_types.Tool(function_declarations=declarations)]
+
+
+def _to_genai_contents(contents: str | list[Turn]) -> Any:
+    if isinstance(contents, str):
+        return contents
+    result: list[genai_types.Content] = []
+    for turn in contents:
+        if turn.role == "tool":
+            parts = [
+                genai_types.Part(
+                    function_response=genai_types.FunctionResponse(
+                        name=tr.name, response=tr.response
+                    )
+                )
+                for tr in (turn.tool_responses or [])
+            ]
+            # Gemini requires function responses in a user-role content
+            result.append(genai_types.Content(role="user", parts=parts))
+        elif turn.role == "model" and turn.tool_calls:
+            parts = []
+            for tc in turn.tool_calls:
+                part = genai_types.Part(
+                    function_call=genai_types.FunctionCall(name=tc.name, args=tc.args)
+                )
+                if tc.thought_signature is not None:
+                    part.thought_signature = tc.thought_signature
+                parts.append(part)
+            result.append(genai_types.Content(role="model", parts=parts))
+        else:
+            role = "model" if turn.role == "model" else "user"
+            result.append(
+                genai_types.Content(role=role, parts=[genai_types.Part(text=turn.text or "")])
+            )
+    return result
 
 
 _llm: LLM | None = None

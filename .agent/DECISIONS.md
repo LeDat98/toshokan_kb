@@ -73,6 +73,19 @@ shared style factories in `web/src/ui.ts`, hover states as small utility classes
 file is the styling source of truth — visual changes go through the Design project first.
 TanStack Query / openapi-typescript adoption deferred to P1 API wiring.
 
+## D-016 · 2026-07-11 · Tool-calling stays behind neutral types in llm/client.py
+The navigator needs Gemini function-calling but only `llm/client.py` may import google.genai
+(convention test). So the client exposes neutral dataclasses — `ToolSpec`, `ToolCall`, `Turn`,
+`ToolResponse` — and translates them to/from genai types internally (`_to_genai_*`). The agent
+package works purely in neutral types. `generate()` now accepts `str | list[Turn]` and disables
+automatic function calling (we drive the loop for budgets/events/context isolation).
+
+## D-017 · 2026-07-11 · Gemini 3 thought signatures must round-trip
+Gemini 3.x rejects (400) a function-call turn echoed back without its `thought_signature`.
+`ToolCall.thought_signature` carries the opaque bytes (captured from response parts in
+`_to_result`, re-attached in `_to_genai_contents`). It is bytes, not a genai type, so the
+boundary holds. Any future manual conversation replay must preserve it.
+
 ## D-015 · 2026-07-11 · docs/ARCHITECTURE.md is maintained in Vietnamese with Mermaid diagrams
 User request: the architecture doc is Vietnamese (exception to D-009's English-docs rule, for
 this file only) and all diagrams are Mermaid fenced blocks so they render in Markdown preview

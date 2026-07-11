@@ -70,8 +70,66 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"    {child.title:<28} {child.stats_line}".rstrip())
         return 0
 
+    if args.command == "ask":
+        return _cmd_ask(args, settings)
+
+    if args.command == "rebuild-views":
+        from libkb.library.views import rebuild_all
+
+        store = LibraryStore(settings.library_dir)
+        report = rebuild_all(store)
+        print(f"Rebuilt {report.rebuilt} descriptions across the tree.")
+        return 0
+
     print(f"'{args.command}' arrives in a later phase — see .agent/ROADMAP.md")
     return 1
+
+
+_TRACE_GLYPH = {
+    "enter": "→",
+    "open": "↳",
+    "read": "▸",
+    "back": "↩",
+    "found": "✓",
+    "not_found": "✗",
+    "budget": "⏱",
+}
+
+
+def _cmd_ask(args, settings) -> int:
+    from libkb.agent.orchestrator import answer_query_safe
+    from libkb.agent.tools import NavEvent
+
+    library_dir = settings.library_dir
+    if not (library_dir / "_meta.json").exists():
+        print(f"No library at {library_dir.resolve()} — run `libkb seed` first.")
+        return 1
+    store = LibraryStore(library_dir)
+
+    def on_event(ev: NavEvent) -> None:
+        if not args.trace:
+            return
+        glyph = _TRACE_GLYPH.get(ev.action, "·")
+        kind = f" ({ev.kind})" if ev.kind else ""
+        detail = f"  — {ev.detail}" if ev.detail else ""
+        print(f"  {glyph} {ev.title}{kind}{detail}")
+
+    if args.trace:
+        print(f'Walking the library for: "{args.query}"\n')
+    result = answer_query_safe(args.query, store=store, event_cb=on_event)
+
+    print("\n" + "─" * 60)
+    print(result.answer.text)
+    if result.answer.citations:
+        print("\nCitations:")
+        for c in result.answer.citations:
+            print(f"  • {c.path}")
+    nav = result.nav
+    print(
+        f"\n[{result.answer.status.upper()} · confidence {result.answer.confidence} · "
+        f"{nav.hops} hops · {nav.backtracks} backtracks]"
+    )
+    return 0
 
 
 if __name__ == "__main__":
