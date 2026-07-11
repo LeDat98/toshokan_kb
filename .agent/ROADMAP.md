@@ -10,14 +10,17 @@ Phase details and rationale: `docs/ARCHITECTURE.md` §8. Function specs: `docs/F
 - [x] `libkb/cli.py`: `init`, `seed` — demo library seeded: AI→{RAG,LLM,CV}, 6 books, 16 pages
 - [x] First commit
 
-## P1 — Walking skeleton
-- [ ] `agent/tools.py` (budget enforcement + visited-set) + unit tests with fake store
-- [ ] `agent/navigator.py` (isolated context, event_cb) — `libkb ask --trace` end-to-end
-- [ ] `library/views.py` (rebuild_description, propagate_up) on seed library
-- [ ] `agent/answerer.py` (citations, InsufficientEvidence) + minimal `orchestrator.py`
-- [ ] `api/`: `POST /api/query` SSE + `GET /api/library/*` + health
-- [ ] Minimal chat UI from approved mockup (Ask screen: conversation + trace panel only)
-- [ ] **DoD**: seed-library lookup answers with path citation; off-library query → honest NOT_FOUND; both visible in UI
+## P1 — Walking skeleton ✅ (2026-07-11)
+- [x] `agent/tools.py` (6 tools, hard budgets, visited-set) + unit tests with real seed store
+- [x] `agent/navigator.py` (isolated context, event_cb) — `libkb ask --trace` end-to-end
+- [x] `library/views.py` (rebuild_description, propagate_up, rebuild_all) + `libkb rebuild-views`
+- [x] `agent/answerer.py` (citations, insufficient→not_found) + `orchestrator.py`
+- [x] `api/`: `POST /api/query` SSE + `GET /api/library/tree|node|book|page` + `/health`
+- [x] Ask UI wired to real streaming query; Library UI wired to real tree/node/book/page
+- [x] **DoD met**: "reranking in RAG" walks AI▸RAG▸Advanced RAG▸p.12 with a path citation;
+  "quantum error correction" → honest NOT_FOUND with backtracks — both live in the browser
+  via the vite proxy. 39 unit tests green; frontend builds clean.
+- [~] Note: token-level answer streaming deferred (answer arrives as one SSE event after the walk)
 
 ## P2 — Ingest + flywheel
 - [ ] `ingest/parse.py` (md, pdf, url) · `split.py` (structure-aware)

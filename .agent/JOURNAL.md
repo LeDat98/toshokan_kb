@@ -38,3 +38,21 @@
 - Gotcha logged: PowerShell 5.1 `Get-Content` without `-Encoding UTF8` mangled the design file
   (cp932 mojibake) — re-extracted with explicit UTF-8. Same cp932 theme as D-012.
 - Handoff: P1 backend next; then replace mock layer with SSE client (vite proxy to :8000 ready).
+
+## 2026-07-11 — P1 walking skeleton, backend + API + UI wiring (session 3, on Opus)
+- Built the whole walking loop: extended llm/client with neutral tool-calling types translated
+  to genai (D-016); agent/tools (6 tools, budgets in code), navigator (isolated context),
+  answerer, orchestrator, library/views; cli `ask --trace`. Then api/ (SSE query on a worker
+  thread D-018, library endpoints), and wired the Ask + Library screens to the real backend.
+- Verified LIVE on gemini-3.5-flash, twice: CLI and browser (via vite proxy). The reranking
+  lookup walks AI▸RAG▸Advanced RAG▸p.12 and cites the path; QEC returns honest NOT_FOUND after
+  backtracking out of Uncatalogued and AI. Committed navigator core as `33c030c`.
+- Two real gotchas, both logged as decisions:
+  * D-017 — Gemini 3 rejects a function-call turn echoed back without its `thought_signature`;
+    had to capture it from response parts and re-attach it. Cost one failed live run to find.
+  * D-018 — SSE-over-POST needs a worker thread + asyncio.Queue bridge; EventSource can't POST
+    so the frontend parses the stream by hand.
+- 39 unit tests (14 new for tools+navigator, all LLM-free via a scripted fake LLM); ruff clean;
+  web builds clean. Ingest + Observatory intentionally left on mock.ts (P2/P3).
+- Handoff: P2 = ingest pipeline + question flywheel + card catalog (see STATE.md). The
+  ask_librarian tool + lookup shortcut plug into the navigator once the catalog exists.

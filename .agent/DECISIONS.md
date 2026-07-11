@@ -86,6 +86,15 @@ Gemini 3.x rejects (400) a function-call turn echoed back without its `thought_s
 `_to_result`, re-attached in `_to_genai_contents`). It is bytes, not a genai type, so the
 boundary holds. Any future manual conversation replay must preserve it.
 
+## D-018 · 2026-07-11 · Query streaming = SSE over POST, walk on a worker thread
+`POST /api/query` returns `text/event-stream`. The orchestrator is synchronous/blocking (LLM
+calls), so the route runs it on a `threading.Thread` and bridges NavEvents to the async
+generator via `loop.call_soon_threadsafe` + an `asyncio.Queue`. Events: `nav` (per step),
+`answer` (once, whole answer), `done`, `error`. The browser can't POST with EventSource, so the
+frontend (`web/src/api.ts`) parses the stream manually via fetch + ReadableStream. Token-level
+answer streaming is deferred — the walk is the live part; the answer lands as one event.
+`web/src/api.ts` is the frontend half of the contract in `libkb/api/events.py` — keep them in sync.
+
 ## D-015 · 2026-07-11 · docs/ARCHITECTURE.md is maintained in Vietnamese with Mermaid diagrams
 User request: the architecture doc is Vietnamese (exception to D-009's English-docs rule, for
 this file only) and all diagrams are Mermaid fenced blocks so they render in Markdown preview
