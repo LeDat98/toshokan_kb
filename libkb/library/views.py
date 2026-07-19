@@ -11,11 +11,18 @@ from dataclasses import dataclass
 
 import structlog
 
-from libkb.library.models import ROOT_ID, NodeID
+from libkb.config import get_settings
+from libkb.library.models import ROOT_ID, NodeID, one_line_of
 from libkb.library.store import LibraryStore
 from libkb.llm.client import LLM, get_llm
 
 log = structlog.get_logger(__name__)
+
+
+def _spine(text: str) -> str:
+    """Same cap as the navigator's menus — a child's one_line is a label, not an abstract. Without
+    it a book's description prompt carries ~1000 chars per page (ROUTING_REDESIGN §0a)."""
+    return one_line_of(text, get_settings().max_one_line_chars) if text else ""
 
 
 @dataclass
@@ -31,17 +38,18 @@ class RebuildReport:
 def rebuild_description(
     store: LibraryStore, node_id: NodeID, *, llm: LLM | None = None
 ) -> str | None:
-    """Regenerate one container's description from its children. Leaves/books unchanged."""
+    """Regenerate a node's description from its children — containers from their sub-nodes,
+    a book from its pages (the TOC one-liners). Only leaf pages are left unchanged."""
     llm = llm or get_llm()
     meta = store.get(node_id)
-    if meta.kind not in ("root", "domain", "shelf"):
+    if meta.kind not in ("root", "domain", "shelf", "book"):
         return None
     children = store.children(node_id)
     if not children:
         return None
 
     child_lines = "\n".join(
-        f'- "{c.title}" [{c.kind}]' + (f": {c.one_line}" if c.one_line else "")
+        f'- "{c.title}" [{c.kind}]' + (f": {_spine(c.one_line)}" if c.one_line else "")
         for c in children
     )
     siblings = _sibling_lines(store, node_id)
@@ -69,7 +77,7 @@ def propagate_up(
     current: NodeID | None = node_id
     while current is not None:
         meta = store.get(current)
-        if meta.kind in ("root", "domain", "shelf") and rebuild_description(
+        if meta.kind in ("root", "domain", "shelf", "book") and rebuild_description(
             store, current, llm=llm
         ):
             touched.append(current)
@@ -91,7 +99,7 @@ def rebuild_all(
         for card in store.children(node_id):
             if card.kind != "page":
                 visit(card.id)
-        if meta.kind in ("root", "domain", "shelf") and rebuild_description(
+        if meta.kind in ("root", "domain", "shelf", "book") and rebuild_description(
             store, node_id, llm=llm
         ):
             report.rebuilt += 1
@@ -107,5 +115,5 @@ def _sibling_lines(store: LibraryStore, node_id: NodeID) -> str:
         return ""
     siblings = [c for c in store.children(meta.parent_id) if c.id != node_id]
     return "\n".join(
-        f'- "{c.title}"' + (f": {c.one_line}" if c.one_line else "") for c in siblings
+        f'- "{c.title}"' + (f": {_spine(c.one_line)}" if c.one_line else "") for c in siblings
     )

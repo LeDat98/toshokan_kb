@@ -16,7 +16,7 @@ from libkb.library.models import NodeCard, NodeMeta, NodeRef, PageContent
 
 
 class StepEvent(BaseModel):
-    action: str  # enter | open | read | back | found | not_found | budget
+    action: str  # enter | open | shelf | read | back | found | not_found | budget | ask | lookup
     title: str
     kind: str | None = None
     node_id: str | None = None
@@ -50,9 +50,22 @@ class AnswerPayload(BaseModel):
     closest: list[str] = []
     hops: int = 0
     backtracks: int = 0
+    # per-query details for the UI panel (D-060). Route fields via `meta`; retrieval dials off the
+    # nav (D-058 resolution); `stripped` is the anti-fabrication signal (D-057).
+    model: str = ""
+    depth: str = ""
+    basket: str = ""
+    fetch_n: int = 0
+    basket_n: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost_usd: float = 0.0
+    latency_ms: int = 0
+    stripped: list[str] = []
 
     @classmethod
-    def of(cls, answer: Answer, nav: NavResult) -> AnswerPayload:
+    def of(cls, answer: Answer, nav: NavResult, meta: dict | None = None) -> AnswerPayload:
+        meta = meta or {}
         return cls(
             text=answer.text,
             status=answer.status,
@@ -61,6 +74,16 @@ class AnswerPayload(BaseModel):
             closest=nav.closest,
             hops=nav.hops,
             backtracks=nav.backtracks,
+            model=meta.get("model", ""),
+            depth=meta.get("depth", ""),
+            basket=meta.get("basket", ""),
+            fetch_n=nav.resolved_fetch,
+            basket_n=nav.resolved_basket,
+            input_tokens=meta.get("input_tokens", 0),
+            output_tokens=meta.get("output_tokens", 0),
+            cost_usd=meta.get("cost_usd", 0.0),
+            latency_ms=meta.get("latency_ms", 0),
+            stripped=list(answer.stripped),
         )
 
 

@@ -19,6 +19,11 @@ class DraftPage:
     one_line: str = ""
     keywords: list[str] = field(default_factory=list)
     source_ref: str = ""
+    # Back matter (References, Bibliography, Acknowledgements) is part of the document but is not
+    # knowledge: it answers no question a reader asks of the library. It stays on the shelf and can
+    # still be read; it just never enters the card catalog, so the sieve cannot propose it as
+    # evidence. Before this, our LARGEST page was a bibliography — indexed and retrievable.
+    indexable: bool = True
 
 
 @dataclass
@@ -58,6 +63,12 @@ class ImportReport:
     books: int = 0
     pages: int = 0
     skipped_pages: int = 0
+    # A page written to the library but missing from the catalog is INVISIBLE to the sieve — it may
+    # as well not have been imported. That used to be a log line; now it is a number the CLI prints
+    # in red, because an import that silently loses 21% of the corpus looks exactly like one that
+    # worked (D-040).
+    indexed_pages: int = 0
+    index_failures: list[str] = field(default_factory=list)
     shelf_strategy: str = ""
     provided: list[str] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)

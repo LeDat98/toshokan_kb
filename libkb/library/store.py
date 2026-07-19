@@ -153,6 +153,19 @@ class LibraryStore:
             return TOC(book_id=book_id)
         return TOC.model_validate_json(path.read_text(encoding="utf-8"))
 
+    def toc_entry(self, page_id: NodeID) -> TOCEntry:
+        """A page's own TOC line, looked up from its book. Lets a menu offer a page that is not on
+        the shelf being rendered (cross-references, §8.1) with the same one_line the page's own book
+        would show — no second source of truth for a spine label."""
+        entry = self._entry(page_id)
+        if entry.kind != "page" or not entry.parent_id:
+            raise NodeNotFound(f"{page_id} is not a page")
+        for chapter in self.toc(entry.parent_id).chapters:
+            for line in chapter.entries:
+                if line.page_id == page_id:
+                    return line
+        raise NodeNotFound(f"{page_id} has no TOC entry in {entry.parent_id}")
+
     def page(self, page_id: NodeID) -> PageContent:
         entry = self._entry(page_id)
         if entry.kind != "page":
@@ -164,6 +177,7 @@ class LibraryStore:
             title=front.get("title", entry.path.stem),
             markdown=body,
             source_ref=front.get("source_ref") or None,
+            indexable=front.get("indexable", True) is not False,
         )
 
     def path_of(self, node_id: NodeID) -> list[NodeRef]:
@@ -254,6 +268,7 @@ class LibraryStore:
         one_line: str = "",
         keywords: list[str] | None = None,
         source_ref: str | None = None,
+        indexable: bool = True,
     ) -> NodeMeta:
         entry = self._entry(book_id)
         if entry.kind != "book":
@@ -264,9 +279,12 @@ class LibraryStore:
         if path.exists():
             raise SlugCollision(f"page file {path.name} already exists")
         page_id = new_node_id()
-        _write_page_file(
-            path, {"id": page_id, "title": title, "source_ref": source_ref or ""}, markdown
-        )
+        front: dict = {"id": page_id, "title": title, "source_ref": source_ref or ""}
+        if not indexable:
+            # written only when false, so the flag reads as an exception in the file, which is what
+            # it is; a page with no `indexable:` key is indexable (ingest/split.py::is_apparatus)
+            front["indexable"] = False
+        _write_page_file(path, front, markdown)
         target_chapter = next((c for c in toc.chapters if c.title == chapter), None)
         if target_chapter is None:
             target_chapter = Chapter(title=chapter)
@@ -281,6 +299,34 @@ class LibraryStore:
             id=page_id, kind="page", slug=path.stem, title=title, parent_id=book_id,
             created_at=now, updated_at=now,
         )
+
+    def set_toc_entry(
+        self,
+        page_id: NodeID,
+        *,
+        one_line: str | None = None,
+        keywords: list[str] | None = None,
+    ) -> None:
+        """Fill a page's spine label / keywords after the fact.
+
+        Ingest writes the page first and indexes it second, and it is the indexing call that
+        generates the label for any source that did not supply one (ingest/questions.py). This is
+        how that label gets home. It touches only the TOC entry — the page body, the single source
+        of truth, is not rewritten (P1)."""
+        entry = self._entry(page_id)
+        if entry.kind != "page" or not entry.parent_id:
+            raise NodeNotFound(f"{page_id} is not a page")
+        toc = self.toc(entry.parent_id)
+        for chapter in toc.chapters:
+            for line in chapter.entries:
+                if line.page_id == page_id:
+                    if one_line is not None:
+                        line.one_line = one_line
+                    if keywords is not None:
+                        line.keywords = keywords
+                    self.write_toc(entry.parent_id, toc)
+                    return
+        raise NodeNotFound(f"{page_id} has no TOC entry in {entry.parent_id}")
 
     def write_toc(self, book_id: NodeID, toc: TOC) -> None:
         entry = self._entry(book_id)
@@ -318,6 +364,20 @@ class LibraryStore:
         )
         meta.updated_at = _now()
         _write_json(entry.path / "_meta.json", meta)
+
+    def clear_see_also(self, node_id: NodeID, *, origin: str) -> int:
+        """Drop only the see-alsos of one origin. Machine-generated cross-links (origin='misroute')
+        are a materialized view over the catalog vectors — they must be fully regenerable, and a
+        regenerable artifact that cannot be cleared drifts (P1). Manual links are never touched."""
+        entry = self._entry(node_id)
+        meta = self.get(node_id)
+        keep = [sa for sa in meta.see_also if sa.origin != origin]
+        removed = len(meta.see_also) - len(keep)
+        if removed:
+            meta.see_also = keep
+            meta.updated_at = _now()
+            _write_json(entry.path / "_meta.json", meta)
+        return removed
 
     def move(self, node_id: NodeID, new_parent_id: NodeID) -> None:
         """Relocate a subtree. The node keeps its ID, so existing references stay valid."""
@@ -391,17 +451,23 @@ class LibraryStore:
         )
 
     def _scan(self) -> None:
-        self._index.clear()
+        # Build a FRESH index and swap it in with one assignment. The store is shared across the
+        # API's worker threads (D-018) and `move()` re-scans, so a clear-then-refill would let a
+        # concurrent reader observe a half-built index and raise NodeNotFound for a valid node.
+        index: dict[NodeID, _Entry] = {}
         root_meta = _read_meta(self.root_dir / "_meta.json")
-        self._index[root_meta.id] = _Entry(self.root_dir, "root", None)
-        self._scan_container(self.root_dir, root_meta.id)
+        index[root_meta.id] = _Entry(self.root_dir, "root", None)
+        self._scan_container(self.root_dir, root_meta.id, index)
         uncat_dir = self.root_dir / "_uncatalogued"
         if (uncat_dir / "_meta.json").exists():
             uncat_meta = _read_meta(uncat_dir / "_meta.json")
-            self._index[uncat_meta.id] = _Entry(uncat_dir, uncat_meta.kind, ROOT_ID)
-            self._scan_container(uncat_dir, uncat_meta.id)
+            index[uncat_meta.id] = _Entry(uncat_dir, uncat_meta.kind, ROOT_ID)
+            self._scan_container(uncat_dir, uncat_meta.id, index)
+        self._index = index
 
-    def _scan_container(self, directory: Path, node_id: NodeID) -> None:
+    def _scan_container(
+        self, directory: Path, node_id: NodeID, index: dict[NodeID, _Entry]
+    ) -> None:
         for sub in ("domains", "shelves", "books"):
             parent = directory / sub
             if not parent.is_dir():
@@ -411,15 +477,15 @@ class LibraryStore:
                 if not meta_file.exists():
                     continue
                 meta = _read_meta(meta_file)
-                self._index[meta.id] = _Entry(child, meta.kind, node_id)
-                self._scan_container(child, meta.id)
+                index[meta.id] = _Entry(child, meta.kind, node_id)
+                self._scan_container(child, meta.id, index)
         pages = directory / "pages"
         if pages.is_dir():
             for page_file in sorted(pages.glob("*.md")):
                 front, _ = _read_page_file(page_file)
                 page_id = front.get("id")
                 if page_id:
-                    self._index[page_id] = _Entry(page_file, "page", node_id)
+                    index[page_id] = _Entry(page_file, "page", node_id)
 
 
 # ------------------------------------------------------------------- helpers

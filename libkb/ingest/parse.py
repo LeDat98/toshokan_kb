@@ -13,7 +13,7 @@ import httpx
 import structlog
 
 from libkb.exceptions import IngestError
-from libkb.ingest.frontmatter import first_heading, split_frontmatter
+from libkb.ingest.frontmatter import clean_title, first_heading, split_frontmatter
 
 log = structlog.get_logger(__name__)
 
@@ -48,7 +48,10 @@ def parse_source(source: str | Path) -> ParsedDoc:
 
 
 def _title_from(markdown: str, fallback: str) -> str:
-    return (first_heading(markdown) or fallback).strip()
+    # clean_title here so the DOCUMENT title (which becomes the book name) is stripped of markdown
+    # emphasis too, not just the section headings — a book was named `**PDF …**` because this funnel
+    # was the one place clean_title had been missing.
+    return clean_title(first_heading(markdown) or fallback)
 
 
 def _parse_text(path: Path) -> ParsedDoc:

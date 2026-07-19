@@ -2,9 +2,26 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import yaml
+
+# PDF→markdown converters emit headings already in bold/italic ("# **1 Introduction**"), and the
+# emphasis then rides into the page/book title, the TOC, the citation and the triage card. Lives
+# here (not in split.py) so `parse.py` can clean the DOCUMENT title too without a circular import —
+# split.py imports parse.py, so the shared helper must sit below both.
+_EMPHASIS = re.compile(r"[*_`]{1,3}")
+
+
+def clean_title(text: str) -> str:
+    """A heading's markdown emphasis is formatting, not part of its name.
+
+    Left in, `**PDF Retrieval Augmented Question Answering**` becomes the book title, then the shelf
+    menu, then the citation the reader sees — MEASURED: a whole book was named that way. Applied to
+    every title, from every source, at the one funnel each passes through.
+    """
+    return _EMPHASIS.sub("", text).strip()
 
 
 def split_frontmatter(text: str) -> tuple[dict[str, Any], str]:

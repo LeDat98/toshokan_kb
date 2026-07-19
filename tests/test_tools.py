@@ -42,12 +42,17 @@ def test_browse_unknown_child_is_forgiving_message(nav):
     assert "No" in out.text and "AI" in out.text  # lists available options
 
 
-def test_browse_a_book_opens_it(nav):
+def test_browse_a_book_lays_out_its_pages(nav):
+    """browse() is tolerant of a book target. In shelf mode (the default) that lays out the whole
+    shelf rather than committing to the book — either way the book's pages become readable."""
     nav.start_menu()
     nav.execute("browse", {"target": "AI"})
     nav.execute("browse", {"target": "RAG"})
     out = nav.execute("browse", {"target": "Advanced RAG Techniques"})  # a book, not a shelf
-    assert "Table of contents" in out.text
+    assert "Reranking & Cross-encoders" in out.text
+    assert nav.execute("read_page", {"title": "Reranking & Cross-encoders"}).text.startswith(
+        "[PAGE"
+    )
 
 
 def test_hop_budget_forces_not_found(nav):

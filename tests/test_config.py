@@ -23,8 +23,8 @@ def test_env_key_matches_case_insensitively(monkeypatch):
 def test_defaults(monkeypatch):
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     settings = Settings(_env_file=None)
-    assert settings.model == "gemini-3.5-flash"
-    assert settings.model_lite == "gemini-3.5-flash"
+    assert settings.model == "gemini-3.5-flash"  # navigation needs the strong tier (D-027)
+    assert settings.model_lite == "gemini-3.1-flash-lite"  # bulk question generation
     assert settings.embed_model == "gemini-embedding-001"
     assert settings.library_dir == Path("./library")
     assert settings.max_hops == 12

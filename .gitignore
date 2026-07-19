@@ -31,7 +31,24 @@ logs/
 # Imported-from-private-source domains — content is private, keep out of git
 # (the publishable AI seed demo under library/domains/ai/ stays tracked)
 /library/domains/retail/
+# AI-News (609-article MultiHop corpus + the ai_knowledge import) — user's call, keep local (D-038)
+/library/domains/ai-news/
+# Downloaded benchmark corpora + cached vectors (FiQA, MultiHop) — redistributable from source
+/benchmarks/
+# Eval case files: questions are generated FROM the corpus, so they carry private content too
+/evals/
+
+# Stray local ingest inputs (test PDFs) + a downloaded corpus — not ours to commit
+/3605-21973-3-PB2.PDF
+/abcxyz.pdf
+/AI_News-main/
+# Regenerable eval catalog + local eval datasets/outputs (may carry private tenant data)
+/library/_eval_catalog/
+/docs/my_eval/
 
 # OS / IDE
 .DS_Store
 Thumbs.db
+
+# BEIR corpora + cached vectors — big, redistributable from source, not ours to commit
+/benchmarks/

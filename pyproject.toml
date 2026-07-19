@@ -13,6 +13,9 @@ dependencies = [
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "google-genai>=1.0",
+    # Alibaba DashScope (Qwen) speaks the OpenAI protocol; the SDK is imported lazily in
+    # llm/client.py so the package still works with no DashScope key and no Qwen model configured.
+    "openai>=1.40",
     "numpy>=1.26",
     "httpx>=0.27",
     "python-ulid>=2.2",
@@ -25,6 +28,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff>=0.5", "pytest>=8.2"]
+# The Model Context Protocol SDK — needed only to talk to a REAL MCP server (Phase C, D-061). The
+# tool seam itself (libkb/tools/mcp.py) adapts any callable, so the core works without this.
+mcp = ["mcp>=1.0"]
 
 [project.scripts]
 libkb = "libkb.cli:main"

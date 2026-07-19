@@ -14,14 +14,16 @@ from pathlib import Path
 
 import structlog
 
+from libkb.catalog.store import Catalog
 from libkb.config import get_settings
 from libkb.ingest.classify import Placement, classify_placement
-from libkb.ingest.importer import get_or_create
+from libkb.ingest.importer import get_or_create, index_page_safe
 from libkb.ingest.parse import parse_source
+from libkb.ingest.questions import index_page
 from libkb.ingest.split import split_document
 from libkb.library.models import ROOT_ID, UNCATALOGUED_ID, NodeID
 from libkb.library.store import LibraryStore
-from libkb.llm.client import LLM
+from libkb.llm.client import LLM, get_llm
 
 log = structlog.get_logger(__name__)
 
@@ -58,10 +60,13 @@ def ingest_document(
     gate: float | None = None,
     replace: bool = False,
     llm: LLM | None = None,
+    catalog: Catalog | None = None,
     event_cb: EventCB | None = None,
 ) -> IngestOutcome:
     settings = get_settings()
     gate = settings.ingest_confidence_gate if gate is None else gate
+    # only filed (non-gated) pages get indexed; parked ones wait for review/approval
+    index_llm = (llm or get_llm()) if catalog is not None else None
     events: list[IngestEvent] = []
 
     def emit(stage: str, status: str, detail: str = "") -> None:
@@ -105,15 +110,18 @@ def ingest_document(
     for page in book.pages:
         if page.title.strip().lower() in existing and not replace:
             continue
-        store.write_page(
+        pm = store.write_page(
             bk.id,
             page.title,
             page.body_markdown,
             one_line=page.one_line,
             keywords=page.keywords,
             source_ref=page.source_ref,
+            indexable=page.indexable,
         )
         n += 1
+        if not gated:
+            index_page_safe(catalog, index_llm, store, pm.id, bk.id, page, book.title)
     store.recompute_stats(ROOT_ID)
     emit("file", "done", store.path_str(bk.id))
 
@@ -153,14 +161,57 @@ def list_uncatalogued(store: LibraryStore) -> list[dict]:
 
 
 def approve_placement(
-    store: LibraryStore, book_id: NodeID, domain_title: str, shelf_title: str
+    store: LibraryStore,
+    book_id: NodeID,
+    domain_title: str,
+    shelf_title: str,
+    *,
+    catalog: Catalog | None = None,
+    llm: LLM | None = None,
 ) -> str:
-    """Move an uncatalogued book to an approved domain/shelf (creating them if needed)."""
+    """Move an uncatalogued book to an approved domain/shelf (creating them if needed).
+
+    Pass `catalog` to index the now-approved pages into the flywheel (they were skipped at
+    ingest time because the book was parked)."""
     domain = get_or_create(store, ROOT_ID, "domain", domain_title, "")
     shelf = get_or_create(store, domain.id, "shelf", shelf_title, "")
     store.move(book_id, shelf.id)
     store.recompute_stats(ROOT_ID)
+    if catalog is not None:
+        _index_book_pages(store, book_id, catalog, llm or get_llm())
     return store.path_str(book_id)
+
+
+def _index_book_pages(store: LibraryStore, book_id: NodeID, catalog: Catalog, llm: LLM) -> int:
+    book_title = store.get(book_id).title
+    total = 0
+    for child in store.children(book_id):
+        if child.kind != "page":
+            continue
+        page = store.page(child.id)
+        if not page.indexable:  # back matter stays on the shelf, out of the sieve
+            continue
+        try:
+            card = index_page(
+                catalog,
+                page_id=page.page_id,
+                book_id=book_id,
+                path=store.path_str(page.page_id),
+                title=page.title,
+                markdown=page.markdown,
+                book_title=book_title,
+                llm=llm,
+            )
+        except Exception as exc:  # best-effort, per page
+            log.warning("index_page_failed", page=page.page_id, error=str(exc))
+            continue
+        total += card.indexed_rows  # rows actually written — a text index writes rows, no questions
+        entry = store.toc_entry(page.page_id)
+        if not entry.one_line and card.one_line:
+            store.set_toc_entry(
+                page.page_id, one_line=card.one_line, keywords=card.keywords or None
+            )
+    return total
 
 
 def _fallback_desc(book) -> str:

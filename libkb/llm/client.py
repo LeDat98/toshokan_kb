@@ -1,17 +1,35 @@
-"""Single gateway to the Gemini API.
+"""Single gateway to the model providers.
 
-Convention (enforced by tests/test_conventions.py): no other module in `libkb`
-may import `google.genai`. All calls log model, tokens and latency.
+Convention (enforced by tests/test_conventions.py): no other module in `libkb` may import
+`google.genai`. All calls log model, tokens and latency.
+
+TWO providers now: Gemini, and Alibaba DashScope (Qwen) through its OpenAI-compatible endpoint.
+Routing is by MODEL NAME (`settings.dashscope_prefixes`), so `LIBKB_MODEL_LITE=qwen-flash` is the
+entire configuration — there is no second set of role flags to drift out of sync.
+
+Deliberately NOT symmetric, and the asymmetry is the point:
+
+  * generate_json + embed  → either provider. This is the bulk, cost-dominated work (the question
+    flywheel at ingest), and it is exactly what a free quota should be spent on.
+  * TOOL CALLING           → **Gemini only**, and DashScope raises rather than degrade silently.
+    Navigation is the one job we MEASURED a cheap model failing at (D-027: page 54% vs 86%), and
+    Gemini's thought-signature protocol (D-017) has no equivalent here. A tool loop that half-works
+    is worse than one that refuses.
 """
 
 from __future__ import annotations
 
+import copy
 import json
+import re
+import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 import numpy as np
 import structlog
 from google import genai
@@ -26,6 +44,31 @@ log = structlog.get_logger(__name__)
 PROMPTS_DIR = Path(__file__).parent / "prompts"
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 _EMBED_BATCH = 100
+_DASHSCOPE_EMBED_BATCH = 10  # DashScope's per-request cap, not a tuning choice
+
+
+def _strip_code_fence(text: str) -> str:
+    """Pull the body out of a ```json … ``` (or bare ```) fence. No-op if there is no fence."""
+    t = text.strip()
+    if not t.startswith("```"):
+        return t
+    t = re.sub(r"^```[a-zA-Z0-9]*\n?", "", t)
+    return re.sub(r"\n?```\s*$", "", t).strip()
+
+
+def _is_retryable(exc: Exception) -> bool:
+    """The OpenAI SDK's exception tree is not importable from here (it is an optional dep), so the
+    status code is read off the exception rather than matched by type."""
+    code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
+    if code is None:
+        # botocore's ClientError carries the HTTP status inside .response, not as an attribute
+        resp = getattr(exc, "response", None)
+        if isinstance(resp, dict):
+            code = resp.get("ResponseMetadata", {}).get("HTTPStatusCode")
+    try:
+        return int(code) in _RETRYABLE_CODES
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass
@@ -82,6 +125,107 @@ class LLM:
         settings = get_settings()
         self._settings = settings
         self._client = genai.Client(api_key=api_key or settings.gemini_api_key)
+        self._dashscope: Any = None  # built lazily: the SDK is optional and the key may be absent
+        self._bedrock: Any = None  # built lazily: boto3 is optional, reads ~/.aws itself
+        self.default_model: str | None = None  # None ⇒ settings.model
+        # Monotonic counters, not a log — the eval diffs them around each case to price a query
+        # (ROUTING_REDESIGN §3.0). Ints, so a long-lived API process cannot grow a list forever.
+        # `+=` on an int is a read-modify-write, so a concurrent eval (backlog #1) could lose
+        # updates without this lock — an undercount is a lie about cost, cheap to prevent.
+        self._token_lock = threading.Lock()
+        self.n_calls = 0
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        # per-model input tokens, so a two-tier query (cheap selector + strong answerer) can be
+        # PRICED correctly — the aggregate counter cannot tell a lite token from a flash one.
+        self.input_by_model: dict[str, int] = {}
+
+    def _record_usage(self, usage: Usage) -> None:
+        """Bump the monotonic counters atomically — safe under a concurrent eval/ingest pool."""
+        with self._token_lock:
+            self.n_calls += 1
+            self.total_input_tokens += usage.input_tokens
+            self.total_output_tokens += usage.output_tokens
+            self.input_by_model[usage.model] = (
+                self.input_by_model.get(usage.model, 0) + usage.input_tokens
+            )
+
+    def with_model(self, model: str | None) -> LLM:
+        """A view of this client that answers on a different model. Switching costs nothing.
+
+        The model a query runs on is a property of the QUERY, not of the process. Reaching for a
+        global — mutating `settings.model`, rebuilding the singleton — would make two concurrent
+        requests fight over one variable and would force a reload to take effect. So instead the
+        API clones the client (the underlying HTTP clients are shared; only the default model and
+        the token counters differ) and hands it down the call chain, which every layer already
+        accepts as `llm=`.
+
+        NOTE the counters are per-view on purpose: a caller that wants to price one query can diff
+        them without another request's tokens leaking into the total.
+        """
+        if not model or model == (self.default_model or self._settings.model):
+            return self
+        clone = copy.copy(self)
+        clone.default_model = model
+        clone.n_calls = 0
+        clone.total_input_tokens = 0
+        clone.total_output_tokens = 0
+        clone.input_by_model = {}
+        return clone
+
+    # ------------------------------------------------------------------ provider routing
+    def _is_dashscope(self, model: str) -> bool:
+        return model.startswith(tuple(self._settings.dashscope_prefixes))
+
+    def _is_bedrock(self, model: str) -> bool:
+        return model.startswith(tuple(self._settings.bedrock_prefixes))
+
+    def _bedrock_client(self) -> Any:
+        """boto3 bedrock-runtime client. Lazy: boto3 is optional. Credentials + region come from the
+        standard AWS chain (env vars, ~/.aws/credentials, ~/.aws/config) that boto3 reads ITSELF —
+        we never open that file. Region falls back to config only if the AWS profile sets none."""
+        if self._bedrock is None:
+            try:
+                import boto3  # noqa: PLC0415 — optional dep, imported only for a Bedrock model
+                from botocore.config import Config
+            except ImportError as exc:  # pragma: no cover - dep guard
+                raise LLMError("Bedrock needs boto3 (pip install boto3)") from exc
+            self._bedrock = boto3.client(
+                "bedrock-runtime",
+                region_name=self._settings.bedrock_region,
+                # own the retry loop (_generate_bedrock); a per-call timeout turns a hung socket
+                # into a fast retryable failure instead of freezing the run (as with DashScope).
+                config=Config(retries={"max_attempts": 0}, read_timeout=60, connect_timeout=10),
+            )
+        return self._bedrock
+
+    def supports_tools(self, model: str | None = None) -> bool:
+        """Tool calling is Gemini-only (see the module docstring). The UI needs to know BEFORE the
+        user picks, not after the walk dies halfway through."""
+        m = model or self.default_model or self._settings.model
+        return not (self._is_dashscope(m) or self._is_bedrock(m))
+
+    def _dashscope_client(self) -> Any:
+        """OpenAI-compatible client for DashScope. Imported lazily so `openai` stays optional."""
+        if self._dashscope is None:
+            try:
+                from openai import OpenAI
+            except ImportError as exc:  # pragma: no cover - dep guard
+                raise LLMError("Qwen/DashScope needs the openai SDK (pip install openai)") from exc
+            if not self._settings.dashscope_api_key:
+                raise LLMError("DASHSCOPE_API_KEY is not set — cannot call a qwen model")
+            self._dashscope = OpenAI(
+                api_key=self._settings.dashscope_api_key,
+                base_url=f"https://{self._settings.dashscope_host}/compatible-mode/v1",
+                # A REQUEST MUST TIME OUT, or a hung socket blocks the whole run. The OpenAI SDK
+                # defaults to 600s per request — MEASURED: a hung DashScope socket froze a 301-case
+                # eval for 30 minutes at 0% CPU, because `_with_retry` never fires until the request
+                # returns, and the request was still "waiting". 60s is generous for a chat/embed
+                # call and turns a dead socket into a fast, retryable failure.
+                timeout=60.0,
+                max_retries=0,  # we own the retry loop (_with_retry); the SDK must not double it
+            )
+        return self._dashscope
 
     def generate(
         self,
@@ -94,7 +238,27 @@ class LLM:
         temperature: float = 0.2,
         max_retries: int = 3,
     ) -> LLMResult:
-        model = model or self._settings.model
+        model = model or self.default_model or self._settings.model
+        if self._is_dashscope(model):
+            return self._generate_dashscope(
+                contents,
+                model=model,
+                system=system,
+                tools=tools,
+                json_schema=json_schema,
+                temperature=temperature,
+                max_retries=max_retries,
+            )
+        if self._is_bedrock(model):
+            return self._generate_bedrock(
+                contents,
+                model=model,
+                system=system,
+                tools=tools,
+                json_schema=json_schema,
+                temperature=temperature,
+                max_retries=max_retries,
+            )
         config = genai_types.GenerateContentConfig(temperature=temperature)
         if system:
             config.system_instruction = system
@@ -118,10 +282,13 @@ class LLM:
                     model=model, contents=genai_contents, config=config
                 )
                 return self._to_result(response, model, int((time.monotonic() - start) * 1000))
-            except genai_errors.APIError as exc:
+            except (genai_errors.APIError, httpx.TransportError) as exc:
+                # httpx.TransportError too: a dropped socket is not an API verdict, and if it is not
+                # wrapped in LLMError it escapes `answer_query_safe` and kills the whole run.
                 last_exc = exc
                 code = getattr(exc, "code", None)
-                if attempt < max_retries and code in _RETRYABLE_CODES:
+                retryable = code in _RETRYABLE_CODES or isinstance(exc, httpx.TransportError)
+                if attempt < max_retries and retryable:
                     log.warning(
                         "llm_retry", model=model, code=code, attempt=attempt + 1, delay_s=delay
                     )
@@ -140,46 +307,258 @@ class LLM:
         system: str | None = None,
         temperature: float = 0.0,
     ) -> Any:
-        """Structured output with one repair retry on invalid JSON."""
+        """Structured output. A bad response is RE-ASKED, never "repaired", and a call that will not
+        come back clean raises — it does not return a half-answer.
+
+        **This used to fail OPEN, and it invented answers.** The old path took a malformed response
+        and asked the model to *fix this output*. A truncated `{"answer": "J` is not a formatting
+        problem — it is a call that did not happen. Asking a model to repair that fragment is asking
+        it to hallucinate the rest, and it obliged: MEASURED on 301 unanswerable MultiHop questions,
+        **40 of them came back with a ONE-CHARACTER answer** (`"J"`, `"F"`, `"X"`) carrying an
+        invented `"sufficient": true`. The library had nothing to say, and the repair path made
+        something up on its behalf — the precise failure P6 exists to forbid.
+
+        So: re-ask the ORIGINAL question (the model gets another go at answering, not at
+        rationalising a fragment), validate the required keys, and if it still will not comply,
+        **raise**. `answer_query_safe` turns an LLMError into an honest NOT_FOUND, which is the only
+        safe direction for this to fail in.
+        """
+        required = list(schema.get("required", [])) if isinstance(schema, dict) else []
+
+        def parse(text: str | None) -> Any | None:
+            try:
+                data = json.loads(text or "")
+            except json.JSONDecodeError:
+                return None
+            # a bare string/number is valid JSON and is NOT the object we asked for
+            if not isinstance(data, dict) or any(key not in data for key in required):
+                return None
+            return data
+
         result = self.generate(
             contents, model=model, system=system, json_schema=schema, temperature=temperature
         )
-        try:
-            return json.loads(result.text or "")
-        except json.JSONDecodeError:
-            log.warning("llm_json_repair", model=model or self._settings.model)
-            repair = self.generate(
-                "Return ONLY valid JSON matching the schema. Fix this output:\n"
-                + (result.text or "<empty>"),
-                model=model,
-                json_schema=schema,
-                temperature=0.0,
+        data = parse(result.text)
+        if data is not None:
+            return data
+
+        log.warning("llm_json_retry", model=model or self.default_model or self._settings.model)
+        retry = self.generate(
+            contents,  # the same question, not "fix your last answer"
+            model=model,
+            system=system,
+            json_schema=schema,
+            temperature=temperature,
+        )
+        data = parse(retry.text)
+        if data is None:
+            raise LLMError(
+                "the model did not return a JSON object with the required keys "
+                f"({', '.join(required) or 'any'}) after a retry"
             )
+        return data
+
+    def _generate_dashscope(
+        self,
+        contents: str | list[Turn],
+        *,
+        model: str,
+        system: str | None,
+        tools: list[ToolSpec] | None,
+        json_schema: Any | None,
+        temperature: float,
+        max_retries: int,
+    ) -> LLMResult:
+        if tools:
+            # Refuse loudly. Navigation is the ONE job we measured a cheaper model failing at
+            # (D-027), and Gemini's thought-signature echo (D-017) has no counterpart here. Falling
+            # back "helpfully" would silently move the hardest work onto the weakest model.
+            raise LLMError(
+                f"tool calling is Gemini-only; {model} is a DashScope model. "
+                "Keep LIBKB_MODEL on Gemini and send only the bulk tier (LIBKB_MODEL_LITE) to Qwen."
+            )
+        client = self._dashscope_client()
+        messages: list[dict[str, Any]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        if isinstance(contents, str):
+            messages.append({"role": "user", "content": contents})
+        else:
+            for turn in contents:
+                if turn.tool_calls or turn.tool_responses:
+                    raise LLMError("DashScope path carries no tool turns")
+                role = "assistant" if turn.role == "model" else "user"
+                messages.append({"role": role, "content": turn.text or ""})
+
+        kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
+        if json_schema is not None:
+            # Qwen honours `json_object` but does NOT enforce a schema server-side the way Gemini
+            # does, so the schema has to travel in the prompt — and `generate_json`'s repair retry
+            # stops being a formality and becomes the actual guarantee.
+            kwargs["response_format"] = {"type": "json_object"}
+            messages[-1]["content"] += (
+                "\n\nReturn ONLY a JSON object matching this schema — no prose, no code fence:\n"
+                + json.dumps(json_schema, ensure_ascii=False)
+            )
+
+        delay = 1.0
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            start = time.monotonic()
             try:
-                return json.loads(repair.text or "")
-            except json.JSONDecodeError as exc:
-                raise LLMError("structured output is not valid JSON after repair retry") from exc
+                response = client.chat.completions.create(**kwargs)
+            except Exception as exc:  # the OpenAI SDK's error tree is not importable here
+                last_exc = exc
+                if attempt < max_retries and _is_retryable(exc):
+                    log.warning("llm_retry", model=model, attempt=attempt + 1, delay_s=delay)
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise LLMError(f"DashScope call failed: {exc}") from exc
+            # A REFUSAL IS NOT A RESPONSE. DashScope returns `choices: null` when its content filter
+            # trips — no error, no status code, no message. MEASURED on the MultiHop corpus: Qwen
+            # refuses to summarise a news article about the Epoch Times (a paper critical of the
+            # Chinese government) that Gemini handles without comment. Unguarded, that surfaced as a
+            # raw `TypeError: 'NoneType' object is not subscriptable`, which the caller logged and
+            # swallowed — so the page silently left the corpus.
+            #
+            # This is a DATA-INTEGRITY property of the provider, not a bug we can fix: choose a
+            # model whose refusals you can live with, and make sure they are LOUD when they happen.
+            if not getattr(response, "choices", None):
+                raise LLMError(
+                    f"{model} returned no choices — DashScope's content filter refuses some "
+                    f"material outright (it does so silently). This page cannot be indexed by "
+                    f"this model; use a Gemini model for it."
+                )
+            usage = Usage(
+                model=model,
+                input_tokens=getattr(response.usage, "prompt_tokens", 0) or 0,
+                output_tokens=getattr(response.usage, "completion_tokens", 0) or 0,
+                latency_ms=int((time.monotonic() - start) * 1000),
+            )
+            self._record_usage(usage)
+            log.info(
+                "llm_call",
+                model=model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                latency_ms=usage.latency_ms,
+                tool_calls=0,
+            )
+            return LLMResult(text=response.choices[0].message.content, usage=usage)
+        raise LLMError("DashScope call failed after retries") from last_exc
+
+    def _generate_bedrock(
+        self,
+        contents: str | list[Turn],
+        *,
+        model: str,
+        system: str | None,
+        tools: list[ToolSpec] | None,
+        json_schema: Any | None,
+        temperature: float,
+        max_retries: int,
+    ) -> LLMResult:
+        """Answer/triage on an Anthropic model via the Bedrock Converse API. Tool-calling stays on
+        Gemini (D-016/D-017): the navigator's loop echoes Gemini thought-signatures, which have no
+        Bedrock counterpart, so a silent fallback would move the hardest job to an untested path."""
+        if tools:
+            raise LLMError(
+                f"tool calling is Gemini-only; {model} is a Bedrock model. "
+                "Keep navigation on Gemini and send only answer/triage to Bedrock."
+            )
+        client = self._bedrock_client()
+        messages: list[dict[str, Any]] = []
+        if isinstance(contents, str):
+            user_text = contents
+            messages.append({"role": "user", "content": [{"text": contents}]})
+        else:
+            for turn in contents:
+                if turn.tool_calls or turn.tool_responses:
+                    raise LLMError("Bedrock path carries no tool turns")
+                role = "assistant" if turn.role == "model" else "user"
+                messages.append({"role": role, "content": [{"text": turn.text or ""}]})
+            user_text = messages[-1]["content"][0]["text"] if messages else ""
+
+        if json_schema is not None:
+            # Like DashScope: no server-side schema enforcement, so the schema rides in the prompt
+            # and `generate_json`'s retry is the real guarantee. Anthropic honours a JSON request.
+            messages[-1]["content"][0]["text"] = user_text + (
+                "\n\nReturn ONLY a JSON object matching this schema — no prose, no code fence:\n"
+                + json.dumps(json_schema, ensure_ascii=False)
+            )
+
+        kwargs: dict[str, Any] = {
+            "modelId": model,
+            "messages": messages,
+            "inferenceConfig": {"temperature": temperature, "maxTokens": 4096},
+        }
+        if system:
+            kwargs["system"] = [{"text": system}]
+
+        delay = 1.0
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            start = time.monotonic()
+            try:
+                response = client.converse(**kwargs)
+            except Exception as exc:  # botocore's error tree is not importable at module top
+                last_exc = exc
+                if attempt < max_retries and _is_retryable(exc):
+                    log.warning("llm_retry", model=model, attempt=attempt + 1, delay_s=delay)
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise LLMError(f"Bedrock call failed: {exc}") from exc
+            parts = response.get("output", {}).get("message", {}).get("content", [])
+            text = "".join(p.get("text", "") for p in parts)
+            if json_schema is not None:
+                # Anthropic wraps structured output in a ```json fence even when asked not to; strip
+                # it so `generate_json`'s json.loads sees the object. JSON path only — a free-text
+                # answer may legitimately contain a code block.
+                text = _strip_code_fence(text)
+            u = response.get("usage", {})
+            usage = Usage(
+                model=model,
+                input_tokens=int(u.get("inputTokens", 0) or 0),
+                output_tokens=int(u.get("outputTokens", 0) or 0),
+                latency_ms=int((time.monotonic() - start) * 1000),
+            )
+            self._record_usage(usage)
+            log.info(
+                "llm_call",
+                model=model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                latency_ms=usage.latency_ms,
+                tool_calls=0,
+            )
+            return LLMResult(text=text, usage=usage)
+        raise LLMError("Bedrock call failed after retries") from last_exc
 
     def embed(
         self, texts: list[str], *, task: str = "RETRIEVAL_DOCUMENT", model: str | None = None
     ) -> np.ndarray:
-        """Returns L2-normalized float32 vectors, shape (len(texts), dim)."""
+        """Returns L2-normalized float32 vectors, shape (len(texts), dim).
+
+        ⚠️ The model that produced a vector is part of the vector's MEANING. Two embedders are two
+        coordinate systems, and a cosine across them is not a worse number — it is not a number.
+        Never populate one catalog from two embedders; reindex whole or not at all.
+        """
         if not texts:
             return np.empty((0, 0), dtype=np.float32)
         model = model or self._settings.embed_model
-        vectors: list[list[float]] = []
+        # An empty string is a valid row of a corpus and an INVALID embedding request: Gemini rejects
+        # the whole batch with "content contains an empty Part", and one blank document (FiQA has
+        # them) killed a 57k-document run at doc 500. A blank doc IS irrelevant to every query, so a
+        # placeholder vector — which matches nothing — is the correct, alignment-preserving fix.
+        texts = [t if t and t.strip() else "(empty)" for t in texts]
         start = time.monotonic()
-        for i in range(0, len(texts), _EMBED_BATCH):
-            batch = texts[i : i + _EMBED_BATCH]
-            try:
-                response = self._client.models.embed_content(
-                    model=model,
-                    contents=batch,
-                    config=genai_types.EmbedContentConfig(task_type=task),
-                )
-            except genai_errors.APIError as exc:
-                raise LLMError(f"Gemini embed failed: {exc}") from exc
-            vectors.extend(e.values for e in response.embeddings)
+        vectors = (
+            self._embed_dashscope(texts, model)
+            if self._is_dashscope(model)
+            else self._embed_gemini(texts, model, task)
+        )
         log.info(
             "llm_embed",
             model=model,
@@ -190,6 +569,58 @@ class LLM:
         norms = np.linalg.norm(array, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         return array / norms
+
+    def _with_retry(self, call: Callable[[], Any], what: str) -> Any:
+        """Embedding had NO retry and leaked raw transport errors, and both halves of that hurt.
+
+        `generate` retries three times; `embed` retried zero, and caught only `genai_errors.APIError`
+        — so an `httpx.RemoteProtocolError` ("Server disconnected without sending a response") sailed
+        straight past `answer_query_safe`, which catches `LLMError`, and killed a 301-case eval after
+        hundreds of paid queries. A transient socket is not an answer about the library; it must look
+        like a retryable failure and then, if it persists, like an LLMError.
+        """
+        delay = 1.0
+        for attempt in range(4):
+            try:
+                return call()
+            except Exception as exc:
+                retryable = _is_retryable(exc) or isinstance(exc, httpx.TransportError)
+                if attempt < 3 and retryable:
+                    log.warning("embed_retry", what=what, attempt=attempt + 1, error=str(exc)[:80])
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise LLMError(f"{what} failed: {exc}") from exc
+        raise LLMError(f"{what} failed after retries")
+
+    def _embed_gemini(self, texts: list[str], model: str, task: str) -> list[list[float]]:
+        vectors: list[list[float]] = []
+        for i in range(0, len(texts), _EMBED_BATCH):
+            batch = texts[i : i + _EMBED_BATCH]
+            response = self._with_retry(
+                lambda b=batch: self._client.models.embed_content(
+                    model=model,
+                    contents=b,
+                    config=genai_types.EmbedContentConfig(task_type=task),
+                ),
+                "Gemini embed",
+            )
+            vectors.extend(e.values for e in response.embeddings)
+        return vectors
+
+    def _embed_dashscope(self, texts: list[str], model: str) -> list[list[float]]:
+        # DashScope's embedding endpoint caps a request far below Gemini's 100; the small batch is
+        # not a tuning choice, it is the API's limit.
+        client = self._dashscope_client()
+        vectors: list[list[float]] = []
+        for i in range(0, len(texts), _DASHSCOPE_EMBED_BATCH):
+            batch = texts[i : i + _DASHSCOPE_EMBED_BATCH]
+            response = self._with_retry(
+                lambda b=batch: client.embeddings.create(model=model, input=b),
+                "DashScope embed",
+            )
+            vectors.extend(item.embedding for item in response.data)
+        return vectors
 
     def load_prompt(self, name: str, **variables: object) -> str:
         """Load prompts/<name>.md and substitute {{var}} placeholders (brace-safe)."""
@@ -222,6 +653,7 @@ class LLM:
             output_tokens=(meta.candidates_token_count or 0) if meta else 0,
             latency_ms=latency_ms,
         )
+        self._record_usage(usage)
         log.info(
             "llm_call",
             model=model,

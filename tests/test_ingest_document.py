@@ -77,12 +77,58 @@ def test_split_on_headings():
     assert "graph index" in hnsw.body_markdown
 
 
-def test_split_without_headings_falls_back_to_size():
-    body = ("A paragraph of text. " * 60 + "\n\n") * 4
+def test_small_unstructured_doc_stays_one_page():
+    """Size is a GUARD, not a strategy: a short blob with no headings is one page."""
+    body = ("A paragraph of text. " * 60 + "\n\n") * 4  # ~4.8k chars, under the 2000-token budget
+    doc = ParsedDoc(title="Blob", markdown=body, source_ref="b.txt", source_type="txt")
+    book = split_document(doc)
+    assert len(book.pages) == 1
+    assert book.pages[0].title == "Blob"
+
+
+def test_split_without_headings_falls_back_to_size_only_when_oversized():
+    body = ("A paragraph of text. " * 60 + "\n\n") * 12  # ~14k chars — over budget, no structure
     doc = ParsedDoc(title="Blob", markdown=body, source_ref="b.txt", source_type="txt")
     book = split_document(doc)
     assert len(book.pages) >= 2
-    assert all(p.title.startswith("Part ") for p in book.pages)
+    assert all(p.title.startswith("Blob (") for p in book.pages)  # named, so it can be cited
+
+
+def test_oversized_section_is_cut_at_its_own_headings():
+    """The bug this rule exists for: a `3 Methodology` page of 9,992 chars that had 12 unused
+    sub-headings inside it. Structure is spent before size ever gets a vote."""
+    filler = "Lorem ipsum dolor sit amet. " * 130  # ~3.6k chars per subsection
+    md = "## 1 Intro\n\nShort.\n\n## 3 Methodology\n\nLead-in.\n\n" + "\n\n".join(
+        f"### 3.{i} Step {i}\n\n{filler}" for i in (1, 2, 3)
+    )
+    doc = ParsedDoc(title="Paper", markdown=md, source_ref="p.pdf", source_type="pdf")
+    book = split_document(doc)
+    titles = [p.title for p in book.pages]
+
+    assert "3 Methodology" not in titles  # the 10k-char page is gone
+    assert any(t.startswith("3 Methodology — 3.") for t in titles)  # cut at ITS headings
+    assert all("Lorem" not in t for t in titles)  # …not by size
+    budget = 2000 * 4
+    assert all(len(p.body_markdown) <= budget for p in book.pages if p.title.startswith("3 "))
+
+
+def test_back_matter_is_kept_but_never_indexed():
+    md = "## 1 Intro\n\nBody text here.\n\n## References\n\n[1] Someone. A paper. 2020.\n"
+    doc = ParsedDoc(title="Paper", markdown=md, source_ref="p.pdf", source_type="pdf")
+    pages = {p.title: p for p in split_document(doc).pages}
+
+    assert "References" in pages  # still on the shelf — a citation may want it
+    assert pages["References"].indexable is False  # …but never in the sieve
+    assert pages["1 Intro"].indexable is True
+
+
+def test_tiny_back_matter_is_not_folded_into_knowledge():
+    """A 30-char bibliography must not sneak back into the catalog on the arm of the section
+    above it — the merge rule is where that would happen."""
+    md = "## 1 Intro\n\n" + "Body. " * 40 + "\n\n## References\n\n[1] X.\n"
+    doc = ParsedDoc(title="Paper", markdown=md, source_ref="p.pdf", source_type="pdf")
+    pages = {p.title: p.indexable for p in split_document(doc).pages}
+    assert pages.get("References") is False
 
 
 # ---------------------------------------------------------------- classify
@@ -162,3 +208,44 @@ def test_ingest_gates_low_confidence_into_uncatalogued(store, tmp_path):
     new_path = approve_placement(store, row["id"], "AI", "Infrastructure")
     assert new_path == "AI ▸ Infrastructure ▸ Vector Databases"
     assert list_uncatalogued(store) == []  # moved out of the queue
+
+
+def test_slug_is_bounded_but_the_title_is_not():
+    """A title is prose; a slug is a filename. A 200-char news headline nested under
+    library/domains/…/shelves/…/books/…/pages/ crashes Windows at 260 chars — it did, on the
+    MultiHop corpus. The full title still lives inside the file; only the NAME is cut."""
+    from libkb.library.models import MAX_SLUG, slugify
+
+    headline = (
+        "Attorney general going after Jeffrey Epstein's estate says she was fired for her "
+        "dogged pursuit: 'My bar license, my integrity were more important to me'"
+    )
+    slug = slugify(headline)
+    assert len(slug) <= MAX_SLUG
+    assert not slug.endswith("-")
+    assert slugify("") == "untitled"
+
+
+def test_a_split_file_is_not_named_after_itself_twice():
+    """`split.py` already names its size-slices `<title> (1/5)`. Prefixing the file title again
+    produced `Long headline … — Long headline … (1/5)` — the title twice, 250+ chars, and the
+    filename that crashed the import."""
+    from libkb.ingest.survey import _qualify
+
+    assert _qualify("Big News", "Big News (1/5)", 0) == "Big News (1/5)"  # already qualified
+    assert _qualify("Big News", "3 Methodology", 0) == "Big News — 3 Methodology"
+    assert _qualify("Big News", "", 2) == "Big News (3)"
+
+
+def test_document_title_is_cleaned_not_just_sections():
+    """A whole book was named `**PDF Retrieval Augmented Question Answering**` because clean_title
+    was applied to section headings but not to the DOCUMENT title (the funnel in parse.py)."""
+    doc = ParsedDoc(
+        title="**PDF Retrieval Augmented Question Answering**",
+        markdown="# **PDF Retrieval Augmented Question Answering**\n\n## Intro\n\nBody.\n",
+        source_ref="p.pdf",
+        source_type="pdf",
+    )
+    from libkb.ingest.parse import _title_from
+
+    assert _title_from(doc.markdown, "fallback") == "PDF Retrieval Augmented Question Answering"

@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { Icon } from "../icons";
 import { PathChip, type PathSeg } from "../components/PathChip";
 import { TracePanel } from "../components/TracePanel";
+import { Markdown } from "../components/Markdown";
+import { ThinkingTimeline } from "../components/ThinkingTimeline";
 import { useToast } from "../components/Toast";
-import { streamQuery, type AnswerPayload, type StepEvent } from "../api";
+import { fetchModels, fetchOptions, fetchPersona, streamQuery, type AnswerPayload, type ModelList, type OptionsInfo, type StepEvent } from "../api";
 import { actionBtnStyle, answerCardStyle, badge, iconBtnStyle, sectionLabelStyle } from "../ui";
 
 interface Exchange {
@@ -44,24 +46,53 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
   const [input, setInput] = useState("");
   const [traceOpen, setTraceOpen] = useState(true);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
+  const [models, setModels] = useState<ModelList | null>(null);
+  const [model, setModel] = useState<string | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  // Retrieval / answer dials from the option panel — null = "use the server default" (D-058/D-057).
+  const [options, setOptions] = useState<OptionsInfo | null>(null);
+  const [depth, setDepth] = useState<string | null>(null);
+  const [basket, setBasket] = useState<string | null>(null);
+  const [banInvented, setBanInvented] = useState<boolean | null>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
 
   const active = exchanges.length ? exchanges[exchanges.length - 1] : null;
   const running = active?.running ?? false;
+  const current = model ?? models?.current ?? "…";
 
   useEffect(() => {
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: "smooth" });
   }, [exchanges]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    fetchModels().then(setModels).catch(() => undefined);
+    fetchOptions().then(setOptions).catch(() => undefined);
+  }, []);
+
+  // "/model" in the composer opens the picker — the keyboard route to the same menu as the button.
+  useEffect(() => {
+    if (input.trim().toLowerCase() === "/model") setPickerOpen(true);
+  }, [input]);
 
   const patch = (id: string, fn: (e: Exchange) => Exchange) =>
     setExchanges((prev) => prev.map((e) => (e.id === id ? fn(e) : e)));
 
+  const pick = (name: string) => {
+    setModel(name);
+    setPickerOpen(false);
+    if (input.trim().toLowerCase() === "/model") setInput("");
+  };
+
   const send = (q: string) => {
     q = q.trim();
     if (!q || running) return;
+    if (q.toLowerCase() === "/model") {
+      setPickerOpen(true);
+      return; // a command, not a question — never send it to the librarian
+    }
     const id = crypto.randomUUID();
     setExchanges((prev) => [...prev, { id, query: q, steps: [], answer: null, running: true }]);
     setInput("");
@@ -78,6 +109,13 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
         onDone: () => patch(id, (e) => ({ ...e, running: false })),
       },
       ctrl.signal,
+      {
+        // every dial rides WITH the query — switching reloads nothing (routes.py::_request_settings)
+        model: model ?? undefined,
+        depth: depth ?? undefined,
+        basket: basket ?? undefined,
+        ban_invented: banInvented ?? undefined,
+      },
     ).catch(() => patch(id, (e) => ({ ...e, running: false, error: "connection lost" })));
   };
 
@@ -126,13 +164,14 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
                 <div style={{ alignSelf: "flex-end", maxWidth: "74%", background: "var(--accent)", color: "var(--accent-ink)", padding: "11px 15px", borderRadius: "14px 14px 4px 14px", fontSize: 14, lineHeight: 1.5, boxShadow: "var(--shadow-sm)" }}>
                   {ex.query}
                 </div>
-                {ex.running && !ex.answer && (
-                  <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--ink-muted)", fontSize: 13.5, fontStyle: "italic", fontFamily: "var(--serif)", padding: "4px 2px" }}>
-                    <span style={{ color: "var(--walk)" }}>
-                      <Icon name="foot" size={16} />
-                    </span>
-                    The librarian is walking the stacks…
-                  </div>
+                {(ex.running || ex.steps.length > 0) && (
+                  <ThinkingTimeline
+                    steps={ex.steps}
+                    running={ex.running}
+                    answered={ex.answer?.status === "answered"}
+                    notFound={ex.answer?.status === "not_found"}
+                    dark={dark}
+                  />
                 )}
                 {ex.answer && <AnswerCard ex={ex} onLibrary={goLibrary} onIngest={goIngest} />}
                 {ex.error && !ex.answer && (
@@ -147,20 +186,85 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
 
         <div style={{ flex: "none", padding: "12px 32px 20px", background: "linear-gradient(to top, var(--surface) 70%, transparent)" }}>
           <div style={{ maxWidth: 720, margin: "0 auto", position: "relative", background: "var(--surface-raised)", border: "1px solid var(--border-strong)", borderRadius: 15, boxShadow: "var(--shadow-md)", padding: "12px 14px 10px" }}>
+            {pickerOpen && models && (
+              <>
+                <div onClick={() => setPickerOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 20 }} />
+                <div style={{ position: "absolute", bottom: "calc(100% + 8px)", left: 8, zIndex: 21, minWidth: 320, background: "var(--surface-raised)", border: "1px solid var(--border-strong)", borderRadius: 13, boxShadow: "var(--shadow-lg, var(--shadow-md))", padding: 6, animation: "fadeUp .16s ease both" }}>
+                  <div style={{ padding: "6px 10px 8px", fontSize: 11, fontWeight: 700, letterSpacing: ".06em", textTransform: "uppercase", color: "var(--ink-muted)" }}>
+                    Model — takes effect on the next question
+                  </div>
+                  {models.models.map((m) => {
+                    // The walk needs tool calling, which only Gemini has. Say so BEFORE the pick,
+                    // not after a half-finished walk dies (llm/client.py refuses rather than degrade).
+                    const walkOnly = !m.tools && models.retrieval_mode !== "cascade";
+                    const disabled = !m.available || walkOnly;
+                    const selected = m.name === current;
+                    return (
+                      <button
+                        key={m.name}
+                        disabled={disabled}
+                        onClick={() => pick(m.name)}
+                        style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", background: selected ? "var(--surface-sunk)" : "transparent", border: 0, borderRadius: 9, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.42 : 1, textAlign: "left" }}
+                      >
+                        <span style={{ width: 6, height: 6, borderRadius: 3, background: selected ? "var(--accent)" : "transparent", flex: "none" }} />
+                        <span style={{ flex: 1, minWidth: 0, fontSize: 13.5, fontWeight: selected ? 650 : 500, color: "var(--ink)" }}>{m.name}</span>
+                        <span style={{ fontSize: 11, color: "var(--ink-muted)" }}>
+                          {!m.available ? "no API key" : walkOnly ? "no tool calling" : m.provider}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+            {settingsOpen && options && (
+              <>
+                <div onClick={() => setSettingsOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 20 }} />
+                <OptionsPopover
+                  options={options}
+                  depth={depth}
+                  basket={basket}
+                  banInvented={banInvented}
+                  onDepth={setDepth}
+                  onBasket={setBasket}
+                  onBan={setBanInvented}
+                />
+              </>
+            )}
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
+                if (e.key === "Escape") setPickerOpen(false);
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();
                   send(input);
                 }
               }}
-              placeholder="Ask the library…"
+              placeholder="Ask the library…  (/model to switch)"
               rows={1}
               style={{ width: "100%", border: 0, background: "transparent", outline: "none", resize: "none", fontSize: 14.5, lineHeight: 1.5, color: "var(--ink)", minHeight: 24 }}
             />
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 6 }}>
+              <button
+                onClick={() => setPickerOpen((v) => !v)}
+                title="Switch model (/model)"
+                className="h-border-accent"
+                style={{ display: "flex", alignItems: "center", gap: 6, height: 26, padding: "0 9px", background: "var(--surface-sunk)", border: "1px solid var(--border)", borderRadius: 7, cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: "var(--ink-muted)", transition: "border-color .12s" }}
+              >
+                <Icon name="sparkle" size={11} />
+                {current}
+              </button>
+              <button
+                onClick={() => setSettingsOpen((v) => !v)}
+                title="Retrieval & answer options"
+                className="h-border-accent"
+                style={{ display: "flex", alignItems: "center", gap: 6, height: 26, padding: "0 9px", background: settingsOpen ? "var(--accent-weak)" : "var(--surface-sunk)", border: "1px solid var(--border)", borderRadius: 7, cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: "var(--ink-muted)", transition: "border-color .12s" }}
+              >
+                <Icon name="settings" size={12} />
+                Options
+              </button>
+              <span style={{ flex: "none" }} />
               <span style={badge("var(--ink-muted)", "var(--surface-sunk)")}>
                 <Icon name="foot" size={12} />
                 walks the real library
@@ -201,9 +305,115 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
   );
 }
 
+// Reveal the (already-verified) answer with a smooth typewriter feel. The backend does NOT stream
+// tokens — it can't, because the anti-fabrication gate (D-057) must see the WHOLE answer before it
+// is shown — so this is a client-side reveal of text that is already final and safe. It animates
+// exactly ONCE, on mount (the card is keyed by exchange id, so history never re-animates), and
+// honours prefers-reduced-motion.
+function useReveal(text: string): { shown: string; done: boolean } {
+  const reduce =
+    typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const [n, setN] = useState(reduce ? text.length : 0);
+  useEffect(() => {
+    if (reduce) { setN(text.length); return; }
+    let cur = 0;
+    const total = text.length;
+    const step = Math.max(3, Math.round(total / 80)); // reveal in ~80 ticks ≈ 1.3s, faster if short
+    const id = window.setInterval(() => {
+      cur = Math.min(total, cur + step);
+      setN(cur);
+      if (cur >= total) window.clearInterval(id);
+    }, 16);
+    return () => window.clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return { shown: text.slice(0, n), done: n >= text.length };
+}
+
+function Segmented({ label, opts, value, onChange }: { label: string; opts: string[]; value: string; onChange: (v: string) => void }) {
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ ...sectionLabelStyle, letterSpacing: ".05em", marginBottom: 6 }}>{label}</div>
+      <div style={{ display: "flex", gap: 4, background: "var(--surface-sunk)", padding: 3, borderRadius: 9 }}>
+        {opts.map((o) => {
+          const on = o === value;
+          return (
+            <button
+              key={o}
+              onClick={() => onChange(o)}
+              style={{ flex: 1, padding: "6px 4px", background: on ? "var(--surface-raised)" : "transparent", color: on ? "var(--ink)" : "var(--ink-muted)", border: on ? "1px solid var(--border-strong)" : "1px solid transparent", borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: on ? 650 : 500, boxShadow: on ? "var(--shadow-sm)" : "none", textTransform: "capitalize" }}
+            >
+              {o}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function OptionsPopover({ options, depth, basket, banInvented, onDepth, onBasket, onBan }: {
+  options: OptionsInfo;
+  depth: string | null; basket: string | null; banInvented: boolean | null;
+  onDepth: (v: string) => void; onBasket: (v: string) => void; onBan: (v: boolean) => void;
+}) {
+  const ban = banInvented ?? options.ban_invented;
+  const [behaviorOpen, setBehaviorOpen] = useState(false);
+  const [persona, setPersona] = useState<string | null>(null);
+  useEffect(() => {
+    if (behaviorOpen && persona === null) fetchPersona().then(setPersona).catch(() => setPersona(""));
+  }, [behaviorOpen, persona]);
+  return (
+    <div style={{ position: "absolute", bottom: "calc(100% + 8px)", left: 8, zIndex: 21, width: 320, maxHeight: "70vh", overflowY: "auto", background: "var(--surface-raised)", border: "1px solid var(--border-strong)", borderRadius: 13, boxShadow: "var(--shadow-lg, var(--shadow-md))", padding: "12px 14px", animation: "fadeUp .16s ease both" }}>
+      <div style={{ ...sectionLabelStyle, letterSpacing: ".06em", marginBottom: 10 }}>
+        Retrieval & answer — next question
+      </div>
+      <Segmented label="Retrieval depth" opts={options.depth.options} value={depth ?? options.depth.current} onChange={onDepth} />
+      <Segmented label="Basket (pages read)" opts={options.basket.options} value={basket ?? options.basket.current} onChange={onBasket} />
+      <button
+        onClick={() => onBan(!ban)}
+        style={{ display: "flex", alignItems: "center", gap: 10, width: "100%", padding: "9px 10px", background: "var(--surface-sunk)", border: "1px solid var(--border)", borderRadius: 9, cursor: "pointer", textAlign: "left", marginBottom: 10 }}
+      >
+        <span style={{ width: 34, height: 20, borderRadius: 11, background: ban ? "var(--accent)" : "var(--border-strong)", position: "relative", flex: "none", transition: "background .15s" }}>
+          <span style={{ position: "absolute", top: 2, left: ban ? 16 : 2, width: 16, height: 16, borderRadius: 8, background: "var(--surface-raised)", transition: "left .15s", boxShadow: "var(--shadow-sm)" }} />
+        </span>
+        <span style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--ink)" }}>Anti-fabrication</div>
+          <div style={{ fontSize: 11, color: "var(--ink-muted)", lineHeight: 1.4 }}>Strip invented numbers not in the sources</div>
+        </span>
+      </button>
+      <div style={{ fontSize: 11, color: "var(--ink-faint)", fontFamily: "var(--mono)", lineHeight: 1.5, paddingTop: 4, borderTop: "1px solid var(--border)" }}>
+        auto → window {options.resolved.fetch} · basket {options.resolved.basket}
+        {" "}for this {options.corpus_pages}-page library
+      </div>
+      <button
+        onClick={() => setBehaviorOpen((v) => !v)}
+        style={{ display: "flex", alignItems: "center", gap: 6, width: "100%", marginTop: 10, padding: "7px 2px", background: "transparent", border: 0, borderTop: "1px solid var(--border)", cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: "var(--ink-muted)" }}
+      >
+        <Icon name={behaviorOpen ? "moon" : "owl"} size={13} />
+        How the librarian behaves
+        <span style={{ flex: 1 }} />
+        <span style={{ color: "var(--ink-faint)" }}>{behaviorOpen ? "−" : "+"}</span>
+      </button>
+      {behaviorOpen && (
+        <div style={{ fontSize: 12, marginTop: 4, paddingTop: 8, borderTop: "1px dashed var(--border)" }}>
+          {persona === null ? (
+            <span style={{ color: "var(--ink-faint)" }}>Loading…</span>
+          ) : (
+            <Markdown>{persona}</Markdown>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AnswerCard({ ex, onLibrary, onIngest }: { ex: Exchange; onLibrary: () => void; onIngest: () => void }) {
   const toast = useToast();
   const a = ex.answer!;
+  const { shown, done } = useReveal(a.text); // hooks run unconditionally — before the not_found return
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const notFound = a.status === "not_found";
   const meta = `${a.hops} hops${a.backtracks ? ` · ${a.backtracks} backtracks` : ""}`;
 
@@ -253,15 +463,20 @@ function AnswerCard({ ex, onLibrary, onIngest }: { ex: Exchange; onLibrary: () =
         <span style={badge(a.confidence === "high" ? "var(--success)" : a.confidence === "low" ? "var(--warning)" : "var(--accent)", a.confidence === "high" ? "var(--success-weak)" : a.confidence === "low" ? "var(--warning-weak)" : "var(--accent-weak)")}>
           {a.confidence} confidence
         </span>
+        {a.stripped && a.stripped.length > 0 && (
+          <span title={`Removed as unsupported: ${a.stripped.join(", ")}`} style={badge("var(--warning)", "var(--warning-weak)")}>
+            <Icon name="check" size={12} />
+            {a.stripped.length} invented {a.stripped.length > 1 ? "numbers" : "number"} removed
+          </span>
+        )}
         <span style={{ flex: 1 }} />
         <span style={{ fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--ink-faint)" }}>{meta}</span>
       </div>
-      <div style={{ fontSize: 14.5, lineHeight: 1.68, color: "var(--ink)" }}>
-        {a.text.split("\n\n").map((para, i) => (
-          <p key={i} style={{ margin: i ? "12px 0 0" : 0, whiteSpace: "pre-wrap" }}>
-            {para}
-          </p>
-        ))}
+      <div style={{ position: "relative" }}>
+        <Markdown>{shown}</Markdown>
+        {!done && (
+          <span style={{ display: "inline-block", width: 7, height: 15, marginLeft: 1, background: "var(--accent)", borderRadius: 1, verticalAlign: "text-bottom", opacity: 0.8, animation: "floaty 1s ease-in-out infinite" }} />
+        )}
       </div>
       {a.citations.length > 0 && (
         <div style={{ marginTop: 16, paddingTop: 14, borderTop: "1px solid var(--border)" }}>
@@ -275,11 +490,27 @@ function AnswerCard({ ex, onLibrary, onIngest }: { ex: Exchange; onLibrary: () =
           </div>
         </div>
       )}
+      {detailsOpen && a.model && (
+        <div style={{ marginTop: 14, padding: "10px 12px", background: "var(--surface-sunk)", border: "1px solid var(--border)", borderRadius: 10, fontFamily: "var(--mono)", fontSize: 11.5, color: "var(--ink-muted)", display: "flex", flexWrap: "wrap", gap: "6px 16px", lineHeight: 1.5 }}>
+          <span><b style={{ color: "var(--ink)" }}>model</b> {a.model}</span>
+          <span><b style={{ color: "var(--ink)" }}>depth</b> {a.depth} → {a.fetch_n} candidates</span>
+          <span><b style={{ color: "var(--ink)" }}>basket</b> {a.basket} → {a.basket_n} pages</span>
+          <span><b style={{ color: "var(--ink)" }}>tokens</b> {a.input_tokens?.toLocaleString()} in · {a.output_tokens?.toLocaleString()} out</span>
+          <span><b style={{ color: "var(--ink)" }}>cost</b> ~${(a.cost_usd ?? 0).toFixed(4)}</span>
+          <span><b style={{ color: "var(--ink)" }}>latency</b> {((a.latency_ms ?? 0) / 1000).toFixed(1)}s</span>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 6, marginTop: 16 }}>
         <button onClick={() => { navigator.clipboard?.writeText(a.text); toast("Answer copied", "copy"); }} style={actionBtnStyle}>
           <Icon name="copy" size={14} />
           Copy
         </button>
+        {a.model && (
+          <button onClick={() => setDetailsOpen((v) => !v)} style={actionBtnStyle}>
+            <Icon name="observatory" size={14} />
+            {detailsOpen ? "Hide" : "Details"}
+          </button>
+        )}
         <span style={{ flex: 1 }} />
         <button onClick={() => toast("Thanks — logged", "thumbup")} title="Helpful" style={iconBtnStyle}>
           <Icon name="thumbup" size={15} />

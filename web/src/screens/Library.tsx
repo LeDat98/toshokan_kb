@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Icon } from "../icons";
 import { PathChip, Seg, type PathSeg } from "../components/PathChip";
+import { Markdown } from "../components/Markdown";
 import { useToast } from "../components/Toast";
 import {
   fetchBook,
@@ -229,11 +230,7 @@ export function Library({ goIngest, goAsk }: { goIngest: () => void; goAsk: () =
                 </div>
                 <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "20px 22px 24px" }}>
                   <div style={{ fontFamily: "var(--serif)", fontWeight: 600, fontSize: 20, letterSpacing: -0.3, marginBottom: 14 }}>{page.title}</div>
-                  <div style={{ fontSize: 14, lineHeight: 1.7, color: "var(--ink)", display: "flex", flexDirection: "column", gap: 12 }}>
-                    {page.markdown.split("\n\n").map((para, i) => (
-                      <p key={i} style={{ margin: 0, whiteSpace: "pre-wrap" }}>{para}</p>
-                    ))}
-                  </div>
+                  <Markdown>{page.markdown}</Markdown>
                 </div>
                 <div style={{ flex: "none", display: "flex", gap: 8, padding: "13px 20px", borderTop: "1px solid var(--border)" }}>
                   <button onClick={() => { goAsk(); toast("Ask the librarian about this topic", "ask"); }} style={{ ...primaryBtnStyle, flex: 1, justifyContent: "center", padding: 10 }}>

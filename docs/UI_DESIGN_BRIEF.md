@@ -140,7 +140,8 @@ book preview (TOC excerpt) + tree picker + **Approve shelf** / **Re-classify** b
 **PathChip** (breadcrumb chip, 3 sizes; the app's signature element) · **NodeCard** ·
 **BookSpine** · **TraceStep** + **TracePanel** · **StatusChip** (FOUND/NOT_FOUND/AMBIGUOUS/
 RUNNING) · **QueryTypeBadge** · **ConfidenceBar** (with gate mark) · **PipelineStepper** ·
-**StatTile** (with sparkline) · **QuestionChip** (vi/en flag dot) · **SeeAlsoChip** ·
+**StatTile*
+* (with sparkline) · **QuestionChip** (vi/en flag dot) · **SeeAlsoChip** ·
 **EmptyState** (library-themed illustrations) · **Toast** (ingest done, eval done, fix applied).
 
 ## 9. Sample content for the mockup (use verbatim)

@@ -14,7 +14,40 @@
       "PowerShell(.\\\\.venv\\\\Scripts\\\\python.exe -m pytest tests/llm -m llm -q)",
       "PowerShell($json = Get-Content 'C:\\\\Users\\\\dat.leduc\\\\.claude\\\\projects\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\tool-results\\\\toolu_01CkpcDjgUSXGapqbVM1rmNh.txt' -Raw | ConvertFrom-Json; $out = 'C:\\\\Users\\\\DAT~1.LED\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\scratchpad\\\\LibraryKB.dc.html'; [System.IO.File]::WriteAllText\\($out, $json.content, [System.Text.Encoding]::UTF8\\); \\(Get-Item $out\\).Length)",
       "PowerShell(npm --version)",
-      "PowerShell($json = Get-Content 'C:\\\\Users\\\\dat.leduc\\\\.claude\\\\projects\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\tool-results\\\\toolu_01CkpcDjgUSXGapqbVM1rmNh.txt' -Raw -Encoding UTF8 | ConvertFrom-Json; $out = 'C:\\\\Users\\\\DAT~1.LED\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\scratchpad\\\\LibraryKB.dc.html'; [System.IO.File]::WriteAllText\\($out, $json.content, \\(New-Object System.Text.UTF8Encoding\\($false\\)\\)\\); \\(Get-Content $out -Encoding UTF8 | Measure-Object -Line\\).Lines)"
+      "PowerShell($json = Get-Content 'C:\\\\Users\\\\dat.leduc\\\\.claude\\\\projects\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\tool-results\\\\toolu_01CkpcDjgUSXGapqbVM1rmNh.txt' -Raw -Encoding UTF8 | ConvertFrom-Json; $out = 'C:\\\\Users\\\\DAT~1.LED\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\\\caf2e087-1654-42d6-aa97-20a3040ec6d9\\\\scratchpad\\\\LibraryKB.dc.html'; [System.IO.File]::WriteAllText\\($out, $json.content, \\(New-Object System.Text.UTF8Encoding\\($false\\)\\)\\); \\(Get-Content $out -Encoding UTF8 | Measure-Object -Line\\).Lines)",
+      "PowerShell(git rm --cached web/tsconfig.tsbuildinfo -q)",
+      "PowerShell(git add .gitignore)",
+      "Bash(bash dev.sh check)",
+      "Bash(bash dev.sh)",
+      "PowerShell($conns = Get-NetTCPConnection -LocalPort 5173 -State Listen -ErrorAction SilentlyContinue; if \\($conns\\) { $pids = $conns | Select-Object -ExpandProperty OwningProcess -Unique; foreach \\($p in $pids\\) { Stop-Process -Id $p -Force -Confirm:$false }; Write-Output \"stopped PID\\(s\\): $pids\" } else { Write-Output \"nothing listening on 5173\" })",
+      "PowerShell(git add dev.sh)",
+      "mcp__claude_ai_Mermaid_Chart__validate_and_render_mermaid_diagram",
+      "Bash(PYTHONIOENCODING=utf-8 python -c ' *)",
+      "PowerShell(git add docs/ARCHITECTURE.md .agent/DECISIONS.md CLAUDE.md)",
+      "Bash(./.venv/Scripts/python.exe -m uvicorn libkb.api.main:app --port 8000 --log-level warning)",
+      "Bash(curl -sN -X POST http://127.0.0.1:8000/api/query -H \"Content-Type: application/json\" -d '{\"q\":\"What is reranking in RAG?\"}' --max-time 90)",
+      "Bash(curl -s http://127.0.0.1:8000/api/health -o /dev/null -w \"api still up: HTTP %{http_code}\\\\n\" --max-time 5)",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\dat.leduc\\\\dev\\\\LibaryKnowledgeBase'; foreach \\($port in 5173,8000\\) { $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { $c.OwningProcess | Select-Object -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue }; Write-Output \"port $port stopped\" } else { Write-Output \"port $port free\" } })",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\dat.leduc\\\\dev\\\\LibaryKnowledgeBase'; foreach \\($port in 5173,8000\\) { $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { $c.OwningProcess | Select-Object -Unique | ForEach-Object { Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue } } }; Write-Output \"servers stopped\"; .\\\\.venv\\\\Scripts\\\\python.exe -m pytest -q 2>&1 | Select-Object -Last 3; .\\\\.venv\\\\Scripts\\\\python.exe -m ruff check . 2>&1 | Select-Object -Last 3)",
+      "PowerShell(Set-Location 'C:\\\\Users\\\\dat.leduc\\\\dev\\\\LibaryKnowledgeBase'; git checkout -- library/; Write-Output \"library/ tracked changes reverted\"; $retail = Test-Path \"library\\\\domains\\\\retail\\\\_meta.json\"; Write-Output \"retail still on disk \\(local\\): $retail\"; Write-Output \"--- git status \\(should be code/docs only\\) ---\"; git status --short | Select-Object -First 25)",
+      "PowerShell(foreach \\($port in 8000,5173\\) { $c = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue; if \\($c\\) { $c.OwningProcess | Select-Object -Unique | ForEach-Object { try { Stop-Process -Id $_ -Force -ErrorAction Stop; Write-Output \"killed PID $_ on $port\" } catch {} } } else { Write-Output \"$port free\" } }; Start-Sleep -Milliseconds 500; $still = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; Write-Output \\(\"8000 now: \" + $\\(if \\($still\\) {\"BUSY\"} else {\"free\"}\\)\\))",
+      "PowerShell($c = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue; $c | Select-Object State, OwningProcess | Format-Table; $pids = $c | Select-Object -ExpandProperty OwningProcess -Unique; foreach \\($p in $pids\\) { $proc = Get-Process -Id $p -ErrorAction SilentlyContinue; if \\($proc\\) { Write-Output \"PID $p = $\\($proc.ProcessName\\)\"; Stop-Process -Id $p -Force -ErrorAction SilentlyContinue } }; Start-Sleep -Milliseconds 800; $still = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; Write-Output \\(\"8000 listen now: \" + $\\(if \\($still\\) {\"BUSY\"} else {\"free\"}\\)\\))",
+      "PowerShell(cmd /c \"taskkill /F /PID 65012 /T\" 2>&1; Start-Sleep -Seconds 1; $still = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue; Write-Output \\(\"8000 now: \" + $\\(if \\($still\\) {\"BUSY \\(will use 8001\\)\"} else {\"free\"}\\)\\))",
+      "Read(//c/Users/DAT~1.LED/AppData/Local/Temp/claude/c--Users-dat-leduc-dev-LibaryKnowledgeBase/caf2e087-1654-42d6-aa97-20a3040ec6d9/tasks/**)",
+      "Bash(curl -s http://127.0.0.1:8001/api/health --max-time 5)",
+      "PowerShell($busy = [bool]\\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\\); Write-Output \"8000 busy: $busy\"; if \\(-not $busy\\) { Write-Output \"8000 free — can run full stack\" })",
+      "PowerShell($busy = [bool]\\(Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue\\); Write-Output \"8000 busy: $busy\")",
+      "Bash(curl -s http://127.0.0.1:8000/api/health --max-time 5)",
+      "Bash(curl -s http://127.0.0.1:8000/openapi.json --max-time 5)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/ --max-time 5)",
+      "Bash(taskkill //F //T //PID 65012)",
+      "Bash(curl -s http://127.0.0.1:8000/api/health --max-time 3)",
+      "Bash(powershell -Command \"Get-Process python,python3.12,python3 -ErrorAction SilentlyContinue | Select-Object Id,ProcessName,StartTime | Format-Table -AutoSize\")",
+      "Bash(netstat -ano)",
+      "Bash(powershell -Command \"Get-CimInstance Win32_Process -Filter 'ProcessId=65012' | Select-Object ProcessId,Name,CreationDate\")"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\DAT~1.LED\\AppData\\Local\\Temp\\claude\\c--Users-dat-leduc-dev-LibaryKnowledgeBase\\a7856983-0624-4108-baba-d0643e3a93e0"
     ]
   }
 }

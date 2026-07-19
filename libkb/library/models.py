@@ -32,12 +32,23 @@ def new_node_id() -> NodeID:
     return f"nd_{ULID()}"
 
 
+MAX_SLUG = 60
+
+
 def slugify(text: str) -> str:
+    """A slug is a filename, and a filename has a hard limit that a title does not.
+
+    A news headline can run to 200 characters; nest that inside
+    `library/domains/…/shelves/…/books/…/pages/` and Windows refuses the write at 260 (a real crash
+    on the MultiHop corpus, not a hypothetical). Truncation is safe here because `write_page`
+    already prefixes an ordinal (`007-…`) that is unique within the book, and because the TITLE —
+    the thing anyone reads or cites — is stored in full inside the file, never in its name.
+    """
     text = text.replace("đ", "d").replace("Đ", "D")
     text = unicodedata.normalize("NFKD", text)
     text = "".join(ch for ch in text if not unicodedata.combining(ch))
     text = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
-    return text or "untitled"
+    return (text[:MAX_SLUG].rstrip("-") or "untitled")
 
 
 def one_line_of(text: str, limit: int = 160) -> str:
@@ -115,6 +126,10 @@ class PageContent(BaseModel):
     title: str
     markdown: str
     source_ref: str | None = None
+    # False for back matter (a bibliography, an acknowledgements page). It stays in the book and can
+    # be read; it is simply never given to the card catalog, so the sieve cannot offer it as
+    # evidence. Absent from a page file ⇒ True.
+    indexable: bool = True
 
 
 class Redirect(BaseModel):

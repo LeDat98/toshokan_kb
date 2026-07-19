@@ -1,7 +1,8 @@
 // Client for the LibraryKB backend. Contract mirrors libkb/api/events.py.
 
 export interface StepEvent {
-  action: "enter" | "open" | "read" | "back" | "found" | "not_found" | "budget";
+  // walk actions + cascade actions (libkb/agent/cascade.py emits lookup/triage/expand)
+  action: "enter" | "open" | "read" | "back" | "found" | "not_found" | "budget" | "lookup" | "triage" | "expand" | "compose" | "thought";
   title: string;
   kind: "domain" | "shelf" | "book" | "page" | null;
   node_id: string | null;
@@ -23,6 +24,17 @@ export interface AnswerPayload {
   closest: string[];
   hops: number;
   backtracks: number;
+  // per-query details (events.py::AnswerPayload) — the details panel
+  model?: string;
+  depth?: string;
+  basket?: string;
+  fetch_n?: number;
+  basket_n?: number;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
+  latency_ms?: number;
+  stripped?: string[];
 }
 
 export interface TreeNode {
@@ -90,6 +102,45 @@ export interface HealthInfo {
   library: { shelves: number; books: number; pages: number } | null;
 }
 
+export interface ModelInfo {
+  name: string;
+  provider: "gemini" | "dashscope";
+  /** false ⇒ cannot run the tree-walk (tool calling is Gemini-only). The cascade works on all. */
+  tools: boolean;
+  /** false ⇒ its provider has no API key configured; offering it would be a lie. */
+  available: boolean;
+}
+
+export interface ModelList {
+  models: ModelInfo[];
+  current: string;
+  retrieval_mode: "walk" | "cascade";
+}
+
+export const fetchModels = () => json<ModelList>("/api/models");
+
+/** The retrieval/answer dials the option panel exposes (contract: routes.py::options). */
+export interface OptionsInfo {
+  depth: { options: string[]; current: string };
+  basket: { options: string[]; current: string };
+  ban_invented: boolean;
+  corpus_pages: number;
+  resolved: { fetch: number; basket: number };
+}
+export const fetchOptions = () => json<OptionsInfo>("/api/options");
+
+/** The librarian's persona/behaviour, verbatim markdown (routes.py::persona) — read-only. */
+export const fetchPersona = () => json<{ text: string }>("/api/persona").then((r) => r.text);
+
+/** Everything that rides WITH one query — the model and the option panel's dials. All optional;
+ *  omitted fields fall back to the server default. */
+export interface QueryOptions {
+  model?: string;
+  depth?: string;
+  basket?: string;
+  ban_invented?: boolean;
+}
+
 interface StreamHandlers {
   onNav?: (ev: StepEvent) => void;
   onAnswer?: (a: AnswerPayload) => void;
@@ -97,12 +148,18 @@ interface StreamHandlers {
   onDone?: () => void;
 }
 
-/** POST /api/query and dispatch server-sent events. EventSource can't POST, so we parse manually. */
-export async function streamQuery(q: string, handlers: StreamHandlers, signal?: AbortSignal): Promise<void> {
+/** POST /api/query and dispatch server-sent events. EventSource can't POST, so we parse manually.
+ *  `opts` travels WITH the query: switching model/depth/basket reloads nothing and restarts nothing. */
+export async function streamQuery(
+  q: string,
+  handlers: StreamHandlers,
+  signal?: AbortSignal,
+  opts?: QueryOptions,
+): Promise<void> {
   const res = await fetch("/api/query", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ q }),
+    body: JSON.stringify({ q, ...opts }),
     signal,
   });
   if (!res.ok || !res.body) {

@@ -10,6 +10,10 @@ TOC → page to answer, instead of one-shot vector similarity. Founding requirem
 3. End of session: rewrite `STATE.md`, append `JOURNAL.md`, tick `ROADMAP.md` boxes.
 
 ## Map
+- `docs/SCORECARD.md` — **what the system actually does, measured.** Every number with its `n`, its
+  regime and the command that produced it; what is NOT measured; the metric bugs that fooled us; the
+  ranked backlog. **Rewrite it after every major change** — it is how a future version gets compared
+  to this one honestly.
 - `docs/ARCHITECTURE.md` — principles **P1–P10** (source of truth for *why*), phases P0–P4.
   Written in Vietnamese with Mermaid diagrams (D-015) — keep it that way when editing.
 - `docs/FUNCTIONS.md` — module/function specs (source of truth for *what to build*).
@@ -24,7 +28,8 @@ TOC → page to answer, instead of one-shot vector similarity. Founding requirem
 - Navigation budgets are enforced in `agent/tools.py` code, not prompts.
 - Answers cite their walk path; no evidence ⇒ honest NOT_FOUND (never improvise).
 - Never touch `.env` (contains `Gemini_API_Key`; Settings reads case-insensitively). Never commit it.
-- Model IDs come from config (`gemini-3.5-flash` default) — no hardcoding elsewhere.
+- Model IDs come from config, two tiers by measured difficulty (D-027): `gemini-3.5-flash` for
+  navigation/answering, `gemini-3.1-flash-lite` for bulk question generation. No hardcoding elsewhere.
 
 ## Commands (venv + pip — no uv, see D-011)
 - Setup: `python -m venv .venv` then `.venv\Scripts\python.exe -m pip install -e ".[dev]"`
