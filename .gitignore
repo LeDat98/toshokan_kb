@@ -45,6 +45,8 @@ logs/
 # Regenerable eval catalog + local eval datasets/outputs (may carry private tenant data)
 /library/_eval_catalog/
 /docs/my_eval/
+# Client-facing proposal deck — kept local, never published (may reference client material)
+/docs/Toshokan_Proposal.pptx
 
 # OS / IDE
 .DS_Store
