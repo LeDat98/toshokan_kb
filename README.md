@@ -9,6 +9,7 @@
 [![React](https://img.shields.io/badge/React_18-61DAFB?style=for-the-badge&logo=react&logoColor=black)](https://react.dev)
 [![Vite](https://img.shields.io/badge/Vite_6-646CFF?style=for-the-badge&logo=vite&logoColor=white)](https://vite.dev)
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
+[![License](https://img.shields.io/badge/License-Noncommercial-yellow?style=for-the-badge)](LICENSE)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/leducdat-profile)
 
 **Ask a question. Get an answer that shows exactly where it came from — or admits the shelf is empty.**
@@ -366,6 +367,26 @@ Ordered by what would make this trustworthy and adoptable, not by what is easies
       generated questions do. Measure a colloquial set at n ≫ 30 before retiring either.
 - [ ] Measure the `synthesize` route the way `decompose` was measured. It ships unmeasured, and that
       is stated here rather than hidden.
+
+---
+
+## License
+
+Licensed under the **[PolyForm Noncommercial License 1.0.0](LICENSE)**.
+
+**You may** use, modify, distribute and build on this for any **noncommercial** purpose — personal
+projects, research, teaching, evaluation, and use by charitable organisations, schools and government
+bodies. **You may not** use it for commercial purposes.
+
+> Note: a noncommercial licence is **source-available**, not "open source" in the
+> [OSI](https://opensource.org/osd) sense. This is deliberate for now.
+
+**Planned:** relicensing to **MIT** later. The copyright is held by a single author, so that switch is
+a one-file change with no CLA to collect — contributors should know their contributions are intended
+to end up under MIT.
+
+Commercial use before then? Open an issue or reach out on
+[LinkedIn](https://www.linkedin.com/in/leducdat-profile).
 
 ---
 
