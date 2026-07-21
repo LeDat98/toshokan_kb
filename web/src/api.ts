@@ -35,6 +35,10 @@ export interface AnswerPayload {
   cost_usd?: number;
   latency_ms?: number;
   stripped?: string[];
+  /** the conversation this answer belongs to — echo it on the next turn to thread chat history */
+  conversation_id?: string;
+  /** true when served from the semantic answer cache (0 LLM calls) — the UI shows a badge */
+  from_cache?: boolean;
 }
 
 export interface TreeNode {
@@ -139,6 +143,8 @@ export interface QueryOptions {
   depth?: string;
   basket?: string;
   ban_invented?: boolean;
+  /** continue this conversation (chat history); omit to start a fresh one */
+  conversation_id?: string;
 }
 
 interface StreamHandlers {
@@ -318,6 +324,146 @@ const json = async <T>(url: string): Promise<T> => {
   if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
   return res.json() as Promise<T>;
 };
+
+// ---------------------------------------------------------------- observatory (learning loop)
+
+/** One KPI card. `spark` is a REAL rolling series (may be empty when there's too little traffic). */
+export interface ObsKpi {
+  label: string;
+  value: string;
+  delta: string;
+  good: boolean;
+  spark: number[];
+}
+export interface ObsReplayStep {
+  kind: "domain" | "shelf" | "book" | "page";
+  title: string;
+  state: "done" | "back" | "read";
+}
+export interface ObsTrajectory {
+  id: string;
+  time: string;
+  query: string;
+  type: "Lookup" | "Synthesis" | "Explore";
+  hops: number;
+  back: number;
+  outcome: "FOUND" | "NOT_FOUND" | "AMBIGUOUS";
+  dur: string;
+  replay: ObsReplayStep[];
+}
+/** KPIs + trajectories feed, computed from real logged traffic (routes.py::observatory).
+ *  `available:false` ⇒ no catalog db or no traffic yet — show an empty state, not zeros. */
+export interface ObservatoryData {
+  available: boolean;
+  kpis: ObsKpi[];
+  trajectories: ObsTrajectory[];
+}
+export const fetchObservatory = () => json<ObservatoryData>("/api/observatory");
+
+// ---------------------------------------------------------------- conversations (chat history)
+
+export interface ConversationMeta {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  pinned: boolean;
+  n_messages: number;
+}
+export interface ConversationMessage {
+  role: "user" | "assistant";
+  text: string;
+  status: string;
+  confidence: string;
+  reason: string;
+  citations: Citation[];
+  created_at: string;
+}
+export interface ConversationDetail {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  pinned: boolean;
+  messages: ConversationMessage[];
+}
+export const fetchConversations = () =>
+  json<{ conversations: ConversationMeta[] }>("/api/conversations").then((r) => r.conversations);
+export const fetchConversation = (id: string) => json<ConversationDetail>(`/api/conversations/${id}`);
+export async function deleteConversation(id: string): Promise<boolean> {
+  const res = await fetch(`/api/conversations/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()).deleted as boolean;
+}
+export async function renameConversation(id: string, title: string): Promise<string> {
+  const res = await fetch(`/api/conversations/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()).title as string;
+}
+export interface PinResult {
+  pinned: boolean;
+  at_limit: boolean;
+  max_pinned: number;
+}
+export async function pinConversation(id: string, pinned: boolean): Promise<PinResult> {
+  const res = await fetch(`/api/conversations/${id}/pin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pinned }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as PinResult;
+}
+
+// ---------------------------------------------------------------- semantic answer cache
+
+export interface CacheEntry {
+  id: number;
+  query: string;
+  answer: string;
+  confidence: string;
+  citations: Citation[];
+  curated: boolean;
+  enabled: boolean;
+  hits: number;
+  created_at: string;
+  last_hit_at: string;
+}
+export interface CacheList {
+  enabled: boolean;
+  entries: CacheEntry[];
+}
+export const fetchCache = () => json<CacheList>("/api/cache");
+export async function toggleCache(enabled: boolean): Promise<boolean> {
+  const res = await fetch("/api/cache/toggle", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()).enabled as boolean;
+}
+export async function editCacheEntry(
+  id: number,
+  patch: { answer?: string; enabled?: boolean },
+): Promise<CacheEntry> {
+  const res = await fetch(`/api/cache/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()) as CacheEntry;
+}
+export async function deleteCacheEntry(id: number): Promise<boolean> {
+  const res = await fetch(`/api/cache/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return (await res.json()).deleted as boolean;
+}
 
 export const fetchHealth = () => json<HealthInfo>("/api/health");
 export const fetchTree = (depth = 3) => json<TreeNode>(`/api/library/tree?depth=${depth}`);

@@ -154,10 +154,43 @@ See `docs/SCORECARD.md` — the living measured-truth doc. All numbers there car
   `Retail ▸ KPIs & Performance Analytics`
 - [x] **Front door = the orchestrator's ROUTE decision** (D-061, not a separate classifier): greetings/
   meta → Concierge, compute → Calculator, else the cascade. Registry-driven, biased to cascade.
-- [ ] `synthesizer.py` (coverage_scan, map-reduce) — no index answers a cross-document "trends across
-  all X" question; MultiHop showed the cascade can't multi-hop past its basket
+- [x] `synthesizer.py` (scan → map-reduce) — the AGGREGATIVE-question path the cascade's basket can't
+  reach (MultiHop: no multi-hop past the basket). A registry ROUTE (D-061): router → aggregative-
+  detect (lite) → wide scan → parallel lite MAP per page → strong REDUCE over compact findings, cited;
+  empty harvest = honest NOT_FOUND. Defers to cascade on a single-fact question. 9 tests, ruff clean.
+  UNMEASURED on purpose — needs an aggregative held-out set before believing it (SCORECARD backlog).
+- [x] **Multi-turn chat history + context management** (the user asked "vẫn chưa có db lưu lịch sử
+  chat nhỉ?"). Two mechanisms that keep the cascade SINGLE-SHOT: (1) `conversation/store.py` — a
+  transcript store (conversations + messages, same gitignored db) that persists every turn; (2)
+  `agent/contextualize.py` — a lite call that rewrites a follow-up ("tell me more about it") into a
+  STANDALONE query BEFORE retrieval, so history never enters the expensive calls (the O(T²) trap the
+  redesign avoids). `answer_query(history=…)`, `/api/query` threads a `conversation_id`, GET/DELETE
+  `/api/conversations`; UI threads the id + a "New" button. Default-on knob `enable_context_rewrite`
+  (no-op + free when there's no history — CLI/eval unchanged). 10 tests. Live-verified: "tell me more
+  about it" rewrote to "…how reranking works in RAG?" and answered, same conversation threaded.
+- [x] **`decompose.py` — query decomposition for COMPOUND multi-hop** (user asked how the system
+  copes with "compare policy before vs after X, and which applies to Y"). Attacks the MEASURED cause
+  (SCORECARD §2.3/§3: sieve has AllGold@20=93.5% but @3=29.6% — one blurred query can't rank all
+  parts into a small basket; comparison/temporal stuck ~60-70%). A registry ROUTE: lite SPLIT into
+  standalone sub-questions → SHARP parallel retrieve per sub-q (`parallel_map` = the Step-Functions
+  Map fan-out, home-grown) → union → ONE combine call reasoning across the parts, cited; empty =
+  NOT_FOUND. Cheaper than synthesize (no per-page map). Defers on non-compound (double-safe). Fixes
+  the RETRIEVAL layer, unlike `triage_coverage` (D-051, refuted at the selection layer). 8 tests.
+  Live-verified: a 3-part RAG question split → 3 sharp retrievals → 4-source cited comparison, and it
+  HONESTLY flagged the part the corpus doesn't cover. **MEASURED & REFUTED** (SCORECARD §3.2, n=80,
+  qwen-plus): vs the cascade baseline it LOST comparison 74.1%→63.0% and temporal 83.3%→66.7%; NOT
+  starvation (at `per_q=6` it reads MORE than baseline and still loses, give-ups turning into wrong
+  answers). The split-recombine throws away the joint signal a wide single-query basket keeps. Joins
+  the measured-refuted list. **The route is now UNREGISTERED by default** (`enable_decompose_route`,
+  `LIBKB_ENABLE_DECOMPOSE=true` to re-register) — the router cannot pick it and it costs nothing;
+  engine + prompts + tests stay so the measurement reproduces. Added `force_route` knob (measurement,
+  auto-enables routing).
 - [ ] `trajectory/analyzer.py` — a failed walk names the description that lied; feed the view queue
-- [ ] Observatory UI: KPIs, trajectories table + trace replay
+- [~] Observatory UI wired to REAL traffic: KPIs (queries/answer-rate/honest-NOT_FOUND/avg-hops with
+  real rolling sparks) + trajectories table + trace replay, from `GET /api/observatory` over the
+  TrajectoryStore (new `reason`/`recent()`/`status_counts()`, `reason` logged per query). Live-verified
+  (345 logged, 96% answer). REMAINING (need `analyzer.py`): misroute heatmap, suggested-fixes,
+  eval-history chart — shown as a labelled PREVIEW, never fabricated numbers.
 - [ ] Date-awareness in the catalog (recency + supersession) — fatal for a legal corpus with
   superseded articles; the sieve has no date column today
 
@@ -176,7 +209,7 @@ tested (**203 tests**), NOT committed, all default-safe.
 - [x] **Front-door routing:** the orchestrator decides the route per message (registry-driven, biased to
   cascade, fail-safe). Concierge (greetings/meta from persona + a TRUE overview), Calculator (compute).
   `LIBKB_ENABLE_ROUTER` default-off. Live-verified: a meta query answered directly, 0 cascade actions.
-- [ ] **Commit** the session (D-061 + narration + A/B/C + routing).
+- [x] **Commit** the session (D-061 + narration + A/B/C + routing) — `0da0915`, 119 files, unpushed.
 - [ ] Real MCP subprocess round-trip (needs `pip install -e ".[mcp]"`).
 - [ ] LLM tool-calling INSIDE the answerer (mid-compose) — deferred (native tool-calling is Gemini-only).
 

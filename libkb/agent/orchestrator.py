@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import structlog
 
-from libkb.agent.answerer import Answer, compose_answer, compose_not_found
+from libkb.agent.answerer import Answer, Citation, compose_answer, compose_not_found
 from libkb.agent.navigator import NavResult, navigate
 from libkb.agent.tools import NavEvent
 from libkb.catalog.search import lookup
@@ -46,19 +46,57 @@ def answer_query(
     shortcut: bool = True,
     use_catalog: bool = True,
     settings: Settings | None = None,
+    history: list[dict] | None = None,
 ) -> QueryResult:
     """`shortcut=False` still lets the walk consult the catalog via ask_librarian.
     `use_catalog=False` removes the catalog entirely — that is the eval's pure `walk` arm.
     `settings` is a per-REQUEST override (the API builds one from the UI option panel) so retrieval
-    depth / basket / answer gates ride with the query, exactly as the model already does."""
+    depth / basket / answer gates ride with the query, exactly as the model already does.
+    `history` is the PRIOR conversation turns (`{role, text}`); when present, a follow-up is
+    rewritten into a standalone query before retrieval (contextualize). None ⇒ stateless."""
     settings = settings or get_settings()
     store = store or LibraryStore(settings.library_dir)
+
+    # MULTI-TURN: turn a follow-up into a standalone query BEFORE anything else, so every path below
+    # (routing, cascade, walk) sees a self-contained question. History touches only this cheap lite
+    # call — it never enters the expensive calls (single-shot economics preserved). No-op and free
+    # when there is no history. Fails open (returns the original query) on any error.
+    if history and settings.enable_context_rewrite:
+        from libkb.agent.contextualize import contextualize
+
+        rewrite = contextualize(query, history, llm or get_llm(), settings)
+        if rewrite.rewritten:
+            query = rewrite.query
+            if event_cb:
+                event_cb(NavEvent("thought", rewrite.thought, None, None, "done", detail="context"))
+
+    # SEMANTIC ANSWER CACHE: a question that MEANS the same as one already answered is served the
+    # cached answer directly — 0 LLM calls, instant — before any routing or retrieval. A hit is
+    # transparent (the UI shows "from cache" + the citations), and only grounded, confident answers
+    # were ever cached (cache/lookup.py), so a hit is a real answer, not a shortcut around honesty.
+    cache = None
+    cache_vec = None
+    if settings.enable_answer_cache:
+        from libkb.cache.lookup import cache_lookup
+
+        cache = _open_answer_cache(settings)
+        if cache is not None:
+            hit, cache_vec = cache_lookup(cache, query, llm or get_llm(), settings)
+            if hit is not None:
+                result = _result_from_cache(hit)
+                if event_cb:
+                    for ev in result.nav.events:
+                        event_cb(ev)
+                cache.record_hit(hit.entry.id)
+                cache.close()
+                _log_trajectory(query, result, settings)
+                return result
 
     # Front-door routing (D-061): the orchestrator DECIDES per message which capability handles it,
     # BEFORE opening the catalog so a greeting never pays to load the vector matrix. Registry-driven
     # (any capability with a `route_when` is a choice) and biased to the library — a knowledge
     # question must never be answered from the model's memory (P6). Default-off knob.
-    if settings.enable_router:
+    if settings.enable_router or settings.force_route:
         from libkb.agent.roles.registry import get_registry
         from libkb.agent.roles.routes import RouteContext, decide_route, routes_from_registry
 
@@ -81,6 +119,8 @@ def answer_query(
                     else None
                 )
                 if outcome is not None:
+                    if cache is not None:
+                        cache.close()  # a route answer (greeting/compute/etc.) is not cached
                     result = QueryResult(answer=outcome[0], nav=outcome[1])
                     _log_trajectory(query, result, settings)
                     return result
@@ -96,6 +136,7 @@ def answer_query(
         if shortcut and catalog is not None and catalog.count():
             result = _try_shortcut(query, store, catalog, llm, settings, event_cb)
             if result is not None:
+                _cache_put_safe(cache, cache_vec, query, result, settings)
                 _log_trajectory(query, result, settings)
                 return result
 
@@ -113,6 +154,7 @@ def answer_query(
                 settings=settings,
             )
             result = QueryResult(answer=cascaded.answer, nav=cascaded.nav)
+            _cache_put_safe(cache, cache_vec, query, result, settings)
             _log_trajectory(query, result, settings)
             return result
 
@@ -122,11 +164,14 @@ def answer_query(
         else:
             answer = compose_not_found(query, nav.closest)
         result = QueryResult(answer=answer, nav=nav)
+        _cache_put_safe(cache, cache_vec, query, result, settings)
         _log_trajectory(query, result, settings)
         return result
     finally:
         if owned_catalog and catalog is not None:
             catalog.close()
+        if cache is not None:
+            cache.close()
 
 
 def _log_trajectory(query: str, result: QueryResult, settings: Settings) -> None:
@@ -151,6 +196,7 @@ def _log_trajectory(query: str, result: QueryResult, settings: Settings) -> None
                     path=result.answer.citations[0].path if result.answer.citations else "",
                     hops=result.nav.hops,
                     backtracks=result.nav.backtracks,
+                    reason=result.nav.reason,
                     route=[
                         {"action": e.action, "title": e.title, "kind": e.kind, "node_id": e.node_id}
                         for e in result.nav.events
@@ -173,6 +219,7 @@ def answer_query_safe(
     shortcut: bool = True,
     use_catalog: bool = True,
     settings: Settings | None = None,
+    history: list[dict] | None = None,
 ) -> QueryResult:
     """Same as answer_query but converts ANY failure into an honest not-found.
 
@@ -192,6 +239,7 @@ def answer_query_safe(
             shortcut=shortcut,
             use_catalog=use_catalog,
             settings=settings,
+            history=history,
         )
     except LLMError as exc:
         note = f"(The librarian couldn't reach the model: {exc})"
@@ -267,3 +315,51 @@ def _open_catalog(settings: Settings) -> Catalog | None:
         return Catalog(settings.db_path)
     except Exception:  # a missing/corrupt catalog must not break querying
         return None
+
+
+def _open_answer_cache(settings: Settings):
+    """Open the semantic answer cache if the db exists. None ⇒ answer normally, cache nothing."""
+    if not settings.db_path.exists():
+        return None
+    try:
+        from libkb.cache.store import AnswerCache
+
+        return AnswerCache(settings.db_path)
+    except Exception:  # a missing/corrupt cache must never break querying
+        return None
+
+
+def _result_from_cache(hit) -> QueryResult:
+    """Turn a cache hit into a normal QueryResult. `reason='cache'` flags `from_cache` for the API;
+    the answer keeps its citations, so a cached answer is as verifiable as a fresh one."""
+    entry = hit.entry
+    detail = f"matched a previous question ({hit.score:.2f})"
+    events = [
+        NavEvent("lookup", "semantic cache", None, None, "done", detail=detail),
+        NavEvent(
+            "found",
+            "FOUND",
+            None,
+            None,
+            "found",
+            detail="from cache · curated" if entry.curated else "from cache",
+        ),
+    ]
+    answer = Answer(
+        text=entry.answer,
+        status="answered",
+        confidence=entry.confidence or "medium",
+        citations=[Citation(path=c["path"], page_id=c["page_id"]) for c in entry.citations],
+    )
+    nav = NavResult(status="FOUND", pages=[], reason="cache", events=events)
+    return QueryResult(answer=answer, nav=nav)
+
+
+def _cache_put_safe(cache, vec, query: str, result: QueryResult, settings: Settings) -> None:
+    """Store a fresh knowledge answer if the honesty rules allow (cache/lookup.py). No-op when the
+    cache is off or the query came in without a computed embedding."""
+    if cache is None or vec is None:
+        return
+    from libkb.cache.lookup import cache_put
+
+    cache_put(cache, query, vec, result, settings)

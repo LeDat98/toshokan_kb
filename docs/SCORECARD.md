@@ -214,6 +214,38 @@ AND wrong (§8 item 2 — the fix is a SEPARATE confidence gate, not a bigger or
 **Always report honesty and cowardice together.** A librarian who refuses everything scores 100%
 honesty and is worthless.
 
+### 3.2 Query DECOMPOSITION — REFUTED (2026-07-20, n=80, basket=10, qwen-plus, text index)
+
+The intuition: a compound question ("compare A before vs after X, and which applies to Y") gives one
+BLURRED query vector; split it into standalone sub-questions, retrieve each sharply in parallel, and
+combine (the LlamaIndex/AWS-Step-Functions "decompose → retrieve → combine" pattern, home-grown as
+the `decompose` route). Attacks the retrieval layer, unlike the refuted `triage_coverage` (D-051).
+Paired A/B, forced via `LIBKB_FORCE_ROUTE=decompose`, same 80 cases (seed 11):
+
+| slice | baseline (cascade) | decompose `per_q=3` | decompose `per_q=6` |
+|---|---|---|---|
+| **comparison** | **74.1%** (20/27) | 63.0% | 63.0% |
+| **temporal** | **83.3%** (15/18) | 72.2% | 66.7% |
+| coward | 1.4% | 8.5% | 4.2% |
+| mean pages read (comp/temp) | 7.1 / 7.4 | 5.5 / 4.3 | 11.0 / 8.9 |
+| wrong answers (comp/temp) | 7 / 2 | 7 / 2 | **9 / 4** |
+
+**Refuted, and not by starvation.** `per_q=3` read FEWER pages than the cascade's basket (union of a
+few 3-page retrievals, deduped) and lost mostly by ABSTAINING (temporal: all 3 losses were give-ups).
+So we fed it more — `per_q=6` reads MORE than baseline (11.0 / 8.9 pages) — and it STILL lost, with the
+losses shifting from abstention to **wrong answers** (comparison wrong 7→9, temporal 2→4). Extra
+evidence turned give-ups into errors, not corrections. **The mechanism itself is worse:** splitting a
+multi-hop question and recombining per-sub-question evidence throws away the joint signal that a single
+wide query + a holistic basket preserves (temporal, which needs joint ordering, is hit hardest).
+
+**Corollary that matters more:** the baseline here — cascade, **basket=10, text index** — scores
+comparison **74.1%** / temporal **83.3%**, well above §3's basket-3/older numbers (60.6% / 65.2%). The
+multi-hop gap is smaller than we thought; a wide-enough single-query basket already assembles the
+evidence and answers it better than decomposition does. Joins NMS / BM25 / cross-encoder rerank /
+`triage_coverage` on the measured-and-refuted list. **Acted on:** the route is now UNREGISTERED by
+default (`LIBKB_ENABLE_DECOMPOSE=true` re-registers it), so the router cannot select it at all; the
+engine, prompts and tests remain so this measurement reproduces. It is NOT a win.
+
 ---
 
 ## 4. Cost — verified prices, 2026-07-14

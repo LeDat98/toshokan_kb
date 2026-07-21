@@ -180,6 +180,11 @@ def routes_from_registry(registry: AgentRegistry) -> dict[str, AgentCard]:
 
 def decide_route(query: str, llm: LLM, settings: Settings, routes: dict[str, AgentCard]) -> str:
     """Pick one route id from the menu. Biased to `search_library`; fails to it on any error."""
+    # A forced route (measurement knob) bypasses the classifier entirely — the route still self-
+    # selects downstream (e.g. decompose defers a non-compound question), so this measures a
+    # mechanism, not a mis-route.
+    if settings.force_route and settings.force_route in routes:
+        return settings.force_route
     if "answer_directly" in routes and _is_trivial_greeting(query):
         return "answer_directly"
     try:

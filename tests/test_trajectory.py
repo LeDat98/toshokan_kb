@@ -182,3 +182,28 @@ def test_only_clean_labels_are_harvested(store, tmp_path):
     assert [t.query for t in traj.harvestable()] == ["c"]
     assert [t.query for t in traj.failures()] == ["b"]
     traj.close()
+
+
+# ---------------------------------------------------------------- the Observatory feed
+
+
+def test_recent_is_newest_first_and_counts_by_status(tmp_path):
+    traj = TrajectoryStore(tmp_path / "catalog.db")
+    traj.record(Trajectory(query="a", status="answered"))
+    traj.record(Trajectory(query="b", status="not_found"))
+    traj.record(Trajectory(query="c", status="answered"))
+
+    assert [t.query for t in traj.recent(limit=2)] == ["c", "b"]  # newest first, limited
+    assert traj.status_counts() == {"answered": 2, "not_found": 1}
+    traj.close()
+
+
+def test_reason_and_created_at_round_trip(tmp_path):
+    """The path that answered (cascade|synthesize|…) and the timestamp survive a write→read, so the
+    Observatory can label a row and place it in time."""
+    traj = TrajectoryStore(tmp_path / "catalog.db")
+    traj.record(Trajectory(query="q", status="answered", reason="synthesize", hops=9))
+    [row] = traj.recent()
+    assert row.reason == "synthesize"
+    assert row.created_at  # an ISO timestamp was stamped
+    traj.close()

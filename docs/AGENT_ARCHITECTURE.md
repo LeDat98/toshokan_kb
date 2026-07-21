@@ -61,6 +61,9 @@ contract + register it. Nothing else changes.
 | **Narrator** *(opt-in)* | Turn raw state → first-person voice with hesitation | 1 lite (optional) | thought events |
 | **Concierge** *(route)* | Answer greetings/meta directly from persona + a true library overview — no retrieval | 1 lite | thought + answer |
 | **Calculator** *(route + tool, C.2)* | Compute arithmetic deterministically (safe eval), routed here for COMPUTE requests | 1 lite (extract) | thought + answer |
+| **Catalog navigator** *(route)* | Structural questions (what domains/shelves/books, how many) — read from the store, never invented | 1 lite (parse) | thought + answer |
+| **Clarify** *(route)* | Too-vague message → ONE clarifying question instead of guessing; defers if answerable | 1 lite | thought + answer |
+| **Synthesizer** *(route)* | AGGREGATIVE questions the basket can't reach — wide scan → parallel lite MAP per page → strong REDUCE over compact findings, cited | 1 lite (detect) + N lite (map) + 1 (reduce) | scan/read/thought + answer |
 | **Tool / Skill agents** *(MCP, C)* | Any MCP tool → CapabilityAgent, dispatched by the registry | tool-capable model | tool-call events |
 
 ```mermaid
@@ -220,6 +223,21 @@ model's memory, P6), failing to the cascade on any error. Layer-0 (code) catches
 free; Layer-1 is one lite structured-JSON call (all providers). Behind `LIBKB_ENABLE_ROUTER`
 (default-off, measured knob). This subsumes "social vs cascade vs tool" into ONE decision, so a new
 route/tool becomes selectable by registering — no decision-code change.
+
+**Registered routes today:** `answer_directly` (Concierge), `calculator`, `catalog`, `clarify`,
+`synthesize`, and `search_library` (the default, handle-less — the cascade). Every non-default route
+**defers** (returns `None`) when its own second-stage check says the message isn't really for it, so
+a mis-route always falls through to the cascade rather than mis-answering.
+
+### Synthesizer route ✅ SHIPPED — the aggregative path the basket can't reach
+The cascade opens a ~10-page basket; a "trends across all X / compare every book on Y" question needs
+EVERY relevant page. MultiHop measured the cascade cannot multi-hop past its basket, so `synthesize`
+is a different retrieval SHAPE: **wide scan** (free ANN, `synth_coverage_n`) → **parallel lite MAP**
+(read each of `synth_map_n` pages truncated, extract its one finding, drop the empties) → **strong
+REDUCE** over the *compact* findings into one cited answer; an empty harvest is an honest NOT_FOUND.
+Cost is earned (aggregative-only) and bounded (lite + truncated + concurrent; the reducer's bill is
+independent of scan width). Optionally scoped to a named domain/shelf. **UNMEASURED on purpose** —
+it needs an aggregative held-out set before any number is believed.
 
 ## 9. Open decisions to lock (in `.agent/DECISIONS.md` when approved)
 

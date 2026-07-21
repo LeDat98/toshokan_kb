@@ -1,17 +1,28 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Icon } from "../icons";
 import { Sparkline } from "../components/Sparkline";
 import { useToast } from "../components/Toast";
-import {
-  EVAL_DOMAINS,
-  EVAL_RUNS,
-  KPIS,
-  MISROUTES,
-  TRAJECTORIES,
-  type Outcome,
-  type QueryType,
-} from "../data/mock";
+import { EVAL_DOMAINS, EVAL_RUNS, MISROUTES, type Outcome, type QueryType } from "../data/mock";
+import { fetchObservatory, type ObservatoryData } from "../api";
+import { CachePanel } from "../components/CachePanel";
 import { KIND_META, actionBtnStyle, chip, kindIconName, sectionLabelStyle } from "../ui";
+
+/** A small honest badge for panels not yet wired to a real backend feed (they need
+ *  trajectory/analyzer.py, which is not built yet). It marks sample data as sample data. */
+function PreviewTag() {
+  return (
+    <span
+      title="Sample data — the trajectory analyzer isn't built yet"
+      style={{
+        ...chip("var(--ink-muted)", "var(--surface-sunk)"),
+        fontSize: 9.5,
+        letterSpacing: ".03em",
+      }}
+    >
+      PREVIEW
+    </span>
+  );
+}
 
 const OUT_META: Record<Outcome, { c: string; cw: string }> = {
   FOUND: { c: "var(--success)", cw: "var(--success-weak)" },
@@ -107,6 +118,21 @@ export function Observatory() {
   const toast = useToast();
   const [expand, setExpand] = useState<Record<string, boolean>>({});
   const [fixes, setFixes] = useState<Record<string, FixState>>({});
+  const [data, setData] = useState<ObservatoryData | null>(null);
+  const [loadErr, setLoadErr] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    fetchObservatory()
+      .then((d) => alive && setData(d))
+      .catch(() => alive && setLoadErr(true));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const kpis = data?.available ? data.kpis : [];
+  const trajectories = data?.trajectories ?? [];
 
   const fixState = (id: string): FixState => fixes[id] ?? "open";
   const fixCardStyle = (id: string) => ({
@@ -151,21 +177,44 @@ export function Observatory() {
           Watch how well the librarian routes — and approve the fixes that make the next walk shorter.
         </p>
 
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 26 }}>
-          {KPIS.map((k) => (
-            <div key={k.label} style={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 13, padding: "15px 16px", boxShadow: "var(--shadow-sm)" }}>
-              <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginBottom: 8 }}>{k.label}</div>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
-                <span style={{ fontFamily: "var(--serif)", fontWeight: 600, fontSize: 28, lineHeight: 1, letterSpacing: -0.5 }}>{k.value}</span>
+        {kpis.length > 0 ? (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 26 }}>
+            {kpis.map((k) => (
+              <div key={k.label} style={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 13, padding: "15px 16px", boxShadow: "var(--shadow-sm)" }}>
+                <div style={{ fontSize: 11.5, color: "var(--ink-muted)", marginBottom: 8 }}>{k.label}</div>
+                <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+                  <span style={{ fontFamily: "var(--serif)", fontWeight: 600, fontSize: 28, lineHeight: 1, letterSpacing: -0.5 }}>{k.value}</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10, minHeight: 20 }}>
+                  <span style={{ fontSize: 11.5, fontWeight: 600, color: k.good ? "var(--success)" : "var(--danger)" }}>{k.delta}</span>
+                  <span style={{ flex: 1 }} />
+                  {k.spark.length > 1 && (
+                    <Sparkline values={k.spark} width={60} height={20} color={k.good ? "var(--success)" : "var(--danger)"} />
+                  )}
+                </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 10 }}>
-                <span style={{ fontSize: 11.5, fontWeight: 600, color: k.good ? "var(--success)" : "var(--danger)" }}>{k.delta}</span>
-                <span style={{ flex: 1 }} />
-                <Sparkline values={k.spark} width={60} height={20} color={k.good ? "var(--success)" : "var(--danger)"} />
-              </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        ) : (
+          <div
+            style={{
+              background: "var(--surface-raised)",
+              border: "1px solid var(--border)",
+              borderRadius: 13,
+              padding: "18px 20px",
+              boxShadow: "var(--shadow-sm)",
+              marginBottom: 26,
+              fontSize: 13,
+              color: "var(--ink-muted)",
+            }}
+          >
+            {loadErr
+              ? "Couldn't reach the backend for live metrics."
+              : data === null
+                ? "Loading live metrics…"
+                : "No traffic logged yet — ask a few questions on the Ask screen and they'll appear here."}
+          </div>
+        )}
 
         <div style={{ display: "grid", gridTemplateColumns: "1.55fr 1fr", gap: 20, alignItems: "start" }}>
           <div>
@@ -193,7 +242,14 @@ export function Observatory() {
                 <span style={{ width: 86 }}>Outcome</span>
                 <span style={{ width: 40, textAlign: "right" }}>Dur</span>
               </div>
-              {TRAJECTORIES.map((t) => (
+              {trajectories.length === 0 && (
+                <div style={{ padding: "18px 15px", fontSize: 12.5, color: "var(--ink-muted)" }}>
+                  {data === null && !loadErr
+                    ? "Loading…"
+                    : "No trajectories logged yet — every question you ask is recorded here."}
+                </div>
+              )}
+              {trajectories.map((t) => (
                 <div key={t.id} style={{ borderBottom: "1px solid var(--border)" }}>
                   <div
                     onClick={() => setExpand((e) => ({ ...e, [t.id]: !e[t.id] }))}
@@ -229,6 +285,11 @@ export function Observatory() {
                         Trace replay · read-only
                       </div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        {t.replay.length === 0 && (
+                          <span style={{ fontSize: 12, fontStyle: "italic", color: "var(--ink-faint)" }}>
+                            No node-walk to replay — answered by {t.type.toLowerCase()}.
+                          </span>
+                        )}
                         {t.replay.map((rs, i) => (
                           <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
                             <span
@@ -267,7 +328,9 @@ export function Observatory() {
               ))}
             </div>
 
-            <div style={{ ...sectionLabelStyle, margin: "24px 0 12px" }}>Eval runs</div>
+            <div style={{ ...sectionLabelStyle, margin: "24px 0 12px" }}>
+              Eval runs <PreviewTag />
+            </div>
             <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow-sm)", padding: "18px 20px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 16 }}>
                 <div style={{ fontFamily: "var(--serif)", fontWeight: 600, fontSize: 15 }}>Routing accuracy over runs</div>
@@ -313,7 +376,9 @@ export function Observatory() {
 
           <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
             <div>
-              <div style={{ ...sectionLabelStyle, marginBottom: 12 }}>Where the librarian gets lost</div>
+              <div style={{ ...sectionLabelStyle, marginBottom: 12 }}>
+                Where the librarian gets lost <PreviewTag />
+              </div>
               <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border)", borderRadius: 13, boxShadow: "var(--shadow-sm)", overflow: "hidden" }}>
                 {MISROUTES.map((m) => (
                   <div key={m.node} style={{ display: "flex", gap: 11, padding: "13px 15px", borderBottom: "1px solid var(--border)" }}>
@@ -339,7 +404,9 @@ export function Observatory() {
             </div>
 
             <div>
-              <div style={{ ...sectionLabelStyle, marginBottom: 12 }}>Suggested fixes</div>
+              <div style={{ ...sectionLabelStyle, marginBottom: 12 }}>
+                Suggested fixes <PreviewTag />
+              </div>
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 <div style={fixCardStyle("f1")}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 11 }}>
@@ -424,6 +491,8 @@ export function Observatory() {
             </div>
           </div>
         </div>
+
+        <CachePanel />
       </div>
     </div>
   );

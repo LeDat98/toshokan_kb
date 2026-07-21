@@ -201,6 +201,15 @@ button {
 .h-raise:hover {
   transform: translateY(-1px);
 }
+/* Row action icons (history sidebar): hidden until the row is hovered or holds focus. */
+.h-row-actions {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.h-bg-hover:hover .h-row-actions,
+.h-bg-hover:focus-within .h-row-actions {
+  opacity: 1;
+}
 .h-chip:hover {
   border-color: var(--accent) !important;
   background: var(--accent-weak) !important;

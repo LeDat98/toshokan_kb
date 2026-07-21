@@ -5,8 +5,35 @@ import { TracePanel } from "../components/TracePanel";
 import { Markdown } from "../components/Markdown";
 import { ThinkingTimeline } from "../components/ThinkingTimeline";
 import { useToast } from "../components/Toast";
-import { fetchModels, fetchOptions, fetchPersona, streamQuery, type AnswerPayload, type ModelList, type OptionsInfo, type StepEvent } from "../api";
+import { fetchModels, fetchOptions, fetchPersona, streamQuery, fetchConversations, fetchConversation, renameConversation, deleteConversation, pinConversation, type AnswerPayload, type ConversationMeta, type ConversationMessage, type ModelList, type OptionsInfo, type StepEvent } from "../api";
+import { HistorySidebar } from "../components/HistorySidebar";
 import { actionBtnStyle, answerCardStyle, badge, iconBtnStyle, sectionLabelStyle } from "../ui";
+
+const MAX_PINNED = 5;
+
+/** Rebuild the chat view from a stored transcript. Historical turns have no thinking-timeline (steps
+ *  aren't persisted); the answer card is reconstructed from what was saved. */
+function toExchanges(messages: ConversationMessage[]): Exchange[] {
+  const out: Exchange[] = [];
+  let pending: string | null = null;
+  for (const m of messages) {
+    if (m.role === "user") {
+      if (pending !== null) out.push({ id: crypto.randomUUID(), query: pending, steps: [], answer: null, running: false });
+      pending = m.text;
+    } else if (m.role === "assistant") {
+      out.push({
+        id: crypto.randomUUID(),
+        query: pending ?? "",
+        steps: [],
+        answer: { text: m.text, status: (m.status || "answered") as AnswerPayload["status"], confidence: m.confidence, citations: m.citations, closest: [], hops: 0, backtracks: 0 },
+        running: false,
+      });
+      pending = null;
+    }
+  }
+  if (pending !== null) out.push({ id: crypto.randomUUID(), query: pending, steps: [], answer: null, running: false });
+  return out;
+}
 
 interface Exchange {
   id: string;
@@ -43,6 +70,11 @@ function pathToSegs(path: string): PathSeg[] {
 
 export function Ask({ dark, goLibrary, goIngest }: AskProps) {
   const [exchanges, setExchanges] = useState<Exchange[]>([]);
+  // The conversation this thread belongs to (chat history). The backend assigns it on the first
+  // answer; we echo it on every later turn so the librarian can resolve follow-ups ("tell me more").
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [conversations, setConversations] = useState<ConversationMeta[]>([]);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [input, setInput] = useState("");
   const [traceOpen, setTraceOpen] = useState(true);
   const [expanded, setExpanded] = useState<Record<number, boolean>>({});
@@ -57,6 +89,7 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const toast = useToast();
 
   const active = exchanges.length ? exchanges[exchanges.length - 1] : null;
   const running = active?.running ?? false;
@@ -67,9 +100,14 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
   }, [exchanges]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+  const refreshConversations = () => {
+    fetchConversations().then(setConversations).catch(() => undefined);
+  };
+
   useEffect(() => {
     fetchModels().then(setModels).catch(() => undefined);
     fetchOptions().then(setOptions).catch(() => undefined);
+    refreshConversations();
   }, []);
 
   // "/model" in the composer opens the picker — the keyboard route to the same menu as the button.
@@ -104,9 +142,15 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
       q,
       {
         onNav: (ev) => patch(id, (e) => ({ ...e, steps: [...e.steps, ev] })),
-        onAnswer: (a) => patch(id, (e) => ({ ...e, answer: a })),
+        onAnswer: (a) => {
+          patch(id, (e) => ({ ...e, answer: a }));
+          if (a.conversation_id) setConversationId(a.conversation_id); // thread history forward
+        },
         onError: (m) => patch(id, (e) => ({ ...e, error: m })),
-        onDone: () => patch(id, (e) => ({ ...e, running: false })),
+        onDone: () => {
+          patch(id, (e) => ({ ...e, running: false }));
+          refreshConversations(); // the new/updated thread shows up in the sidebar
+        },
       },
       ctrl.signal,
       {
@@ -115,9 +159,52 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
         depth: depth ?? undefined,
         basket: basket ?? undefined,
         ban_invented: banInvented ?? undefined,
+        conversation_id: conversationId ?? undefined, // continue the current chat (or start one)
       },
     ).catch(() => patch(id, (e) => ({ ...e, running: false, error: "connection lost" })));
   };
+
+  const newConversation = () => {
+    abortRef.current?.abort();
+    setExchanges([]);
+    setConversationId(null);
+    setExpanded({});
+    setInput("");
+  };
+
+  const openConversation = (cid: string) => {
+    if (cid === conversationId) return;
+    abortRef.current?.abort();
+    fetchConversation(cid)
+      .then((d) => {
+        setExchanges(toExchanges(d.messages));
+        setConversationId(d.id);
+        setExpanded({});
+        setInput("");
+      })
+      .catch(() => toast("Couldn't open that conversation", "alert"));
+  };
+
+  const handleRename = (cid: string, title: string) =>
+    renameConversation(cid, title)
+      .then(refreshConversations)
+      .catch(() => toast("Rename failed", "alert"));
+
+  const handleDelete = (cid: string) =>
+    deleteConversation(cid)
+      .then(() => {
+        if (cid === conversationId) newConversation();
+        refreshConversations();
+      })
+      .catch(() => toast("Delete failed", "alert"));
+
+  const handlePin = (cid: string, pinned: boolean) =>
+    pinConversation(cid, pinned)
+      .then((r) => {
+        if (r.at_limit) toast(`You can pin up to ${r.max_pinned} conversations`, "alert");
+        else refreshConversations();
+      })
+      .catch(() => toast("Pin failed", "alert"));
 
   const stop = () => {
     abortRef.current?.abort();
@@ -126,6 +213,18 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
 
   return (
     <div style={{ height: "100%", display: "flex", minWidth: 0, position: "relative" }}>
+      <HistorySidebar
+        conversations={conversations}
+        activeId={conversationId}
+        maxPinned={MAX_PINNED}
+        collapsed={sidebarCollapsed}
+        onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
+        onNew={newConversation}
+        onOpen={openConversation}
+        onRename={handleRename}
+        onDelete={handleDelete}
+        onPin={handlePin}
+      />
       <section style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", position: "relative" }}>
         <div ref={scroller} style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "28px 32px 8px" }}>
           <div style={{ maxWidth: 720, margin: "0 auto", display: "flex", flexDirection: "column", gap: 26 }}>
@@ -264,6 +363,17 @@ export function Ask({ dark, goLibrary, goIngest }: AskProps) {
                 <Icon name="settings" size={12} />
                 Options
               </button>
+              {exchanges.length > 0 && (
+                <button
+                  onClick={newConversation}
+                  title="Start a new conversation (clears chat history)"
+                  className="h-border-accent"
+                  style={{ display: "flex", alignItems: "center", gap: 6, height: 26, padding: "0 9px", background: "var(--surface-sunk)", border: "1px solid var(--border)", borderRadius: 7, cursor: "pointer", fontSize: 11.5, fontWeight: 600, color: "var(--ink-muted)", transition: "border-color .12s" }}
+                >
+                  <Icon name="plus" size={12} />
+                  New
+                </button>
+              )}
               <span style={{ flex: "none" }} />
               <span style={badge("var(--ink-muted)", "var(--surface-sunk)")}>
                 <Icon name="foot" size={12} />
@@ -463,6 +573,12 @@ function AnswerCard({ ex, onLibrary, onIngest }: { ex: Exchange; onLibrary: () =
         <span style={badge(a.confidence === "high" ? "var(--success)" : a.confidence === "low" ? "var(--warning)" : "var(--accent)", a.confidence === "high" ? "var(--success-weak)" : a.confidence === "low" ? "var(--warning-weak)" : "var(--accent-weak)")}>
           {a.confidence} confidence
         </span>
+        {a.from_cache && (
+          <span title="Answered instantly from the semantic cache — no model call. Same citations." style={badge("var(--info)", "var(--info-weak)")}>
+            <Icon name="sparkle" size={12} />
+            from cache
+          </span>
+        )}
         {a.stripped && a.stripped.length > 0 && (
           <span title={`Removed as unsupported: ${a.stripped.join(", ")}`} style={badge("var(--warning)", "var(--warning-weak)")}>
             <Icon name="check" size={12} />

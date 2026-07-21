@@ -62,6 +62,11 @@ class AnswerPayload(BaseModel):
     cost_usd: float = 0.0
     latency_ms: int = 0
     stripped: list[str] = []
+    # the conversation this answer belongs to — the frontend echoes it on the next turn so the
+    # backend can thread history (chat memory). Empty when persistence was unavailable.
+    conversation_id: str = ""
+    # true when this answer was served from the semantic cache (transparency — the UI shows a badge)
+    from_cache: bool = False
 
     @classmethod
     def of(cls, answer: Answer, nav: NavResult, meta: dict | None = None) -> AnswerPayload:
@@ -84,6 +89,8 @@ class AnswerPayload(BaseModel):
             cost_usd=meta.get("cost_usd", 0.0),
             latency_ms=meta.get("latency_ms", 0),
             stripped=list(answer.stripped),
+            conversation_id=meta.get("conversation_id", ""),
+            from_cache=(nav.reason == "cache"),
         )
 
 

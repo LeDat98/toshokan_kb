@@ -76,5 +76,20 @@ def get_registry() -> AgentRegistry:
 
         reg.register(CatalogNavigatorRoute())
         reg.register(ClarifyRoute())
+        # cross-document synthesis: an aggregative-question route that scans wide and map-reduces
+        # where the cascade's basket cannot reach; defers to the cascade on a single-fact question.
+        from libkb.agent.roles.synthesizer import SynthesizerRoute
+
+        reg.register(SynthesizerRoute())
+        # Query decomposition is MEASURED AND REFUTED (SCORECARD §3.2) — it lost 11–17 points on the
+        # very multi-hop slices it targeted, even when fed more evidence than the cascade. So it is
+        # NOT offered to the router by default; the knob re-registers it only to reproduce the
+        # measurement. The engine and prompts remain in the tree.
+        from libkb.config import get_settings
+
+        if get_settings().enable_decompose_route:
+            from libkb.agent.roles.decompose import DecomposeRoute
+
+            reg.register(DecomposeRoute())
         _default = reg
     return _default

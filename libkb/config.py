@@ -107,6 +107,41 @@ class Settings(BaseSettings):
     # (answer directly, no retrieval) or a knowledge question (the cascade — the default). Default
     # OFF: a measured knob that adds one cheap lite call per query. Enable LIBKB_ENABLE_ROUTER=true.
     enable_router: bool = Field(default=False, alias="LIBKB_ENABLE_ROUTER")
+    # Force ONE front-door route, bypassing the lite classifier — a MEASUREMENT knob. An eval can
+    # send every query to `decompose` (which still self-selects: it defers a non-compound question
+    # to the cascade), so the mechanism is measured without the router's conservative selection
+    # muddying it. Empty = normal routing. A non-empty value also turns routing ON (not both).
+    force_route: str = Field(default="", alias="LIBKB_FORCE_ROUTE")
+
+    # MULTI-TURN CONTEXT (chat history). A follow-up ("tell me more about it") is rewritten into a
+    # STANDALONE query by one lite call BEFORE retrieval, so the cascade stays single-shot and
+    # history never enters the expensive calls (the O(T²) trap the retrieval redesign avoids). Only
+    # fires when a conversation history is actually present, so it is a no-op — and free — on the
+    # first turn and for every stateless (CLI/eval) caller. `context_history_turns` bounds how many
+    # recent messages the rewrite sees. Default ON: without it, multi-turn simply does not work, and
+    # the cost is one cheap lite call paid only on genuine follow-ups.
+    enable_context_rewrite: bool = Field(default=True, alias="LIBKB_ENABLE_CONTEXT_REWRITE")
+    context_history_turns: int = Field(default=6, alias="LIBKB_CONTEXT_HISTORY_TURNS")
+
+    # SEMANTIC ANSWER CACHE. A question that MEANS the same as one already answered is served the
+    # cached answer — 0 LLM calls, instant. Default ON (the user's call). Trust is preserved by the
+    # honesty rules in cache/lookup.py (never cache a NOT_FOUND, only grounded+confident answers)
+    # and by a PRECISION-first threshold: a wrong hit serves the wrong question's answer, so it errs
+    # toward a miss. MEASURED (2026-07-21, SEMANTIC_SIMILARITY, gemini-embedding-001): reranking
+    # paraphrases sit at 0.92–0.93, but a DIFFERENT topic "What is chunking in RAG?" already sits at
+    # 0.875 (the shared "in RAG" inflates it, the D-028 crowding). So 0.92 catches near-duplicate
+    # rephrasings while clearing the 0.875 cross-topic with margin — recall is modest BY DESIGN
+    # (only genuine near-duplicates hit). Watch the cache panel and tune per corpus.
+    enable_answer_cache: bool = Field(default=True, alias="LIBKB_ENABLE_ANSWER_CACHE")
+    answer_cache_threshold: float = Field(default=0.92, alias="LIBKB_ANSWER_CACHE_THRESHOLD")
+    answer_cache_margin: float = Field(default=0.0, alias="LIBKB_ANSWER_CACHE_MARGIN")
+    answer_cache_min_confidence: Literal["low", "medium", "high"] = Field(
+        default="medium", alias="LIBKB_ANSWER_CACHE_MIN_CONFIDENCE"
+    )
+    # Q-to-Q matching wants a symmetric task; SEMANTIC_SIMILARITY is the right gemini task type.
+    answer_cache_embed_task: str = Field(
+        default="SEMANTIC_SIMILARITY", alias="LIBKB_ANSWER_CACHE_EMBED_TASK"
+    )
     # RETRIEVAL DEPTH — one dial, three tiers (D-049). The scale curve (D-048, §2.4) showed the
     # sieve is scale-invariant only if the window is WIDE: R@10 collapses as the corpus grows
     # (0.95→0.70 over 2k→57k) but R@50 barely moves 2k→10k and R@100 flatter still. The reranker
@@ -197,6 +232,42 @@ class Settings(BaseSettings):
     # smartness but the BASKET SIZE: AllGold@10 is 75% for multi-source and comparison already sits
     # there. Kept default-OFF (mechanism preserved, like confidence gate D-046) for a later revival.
     triage_coverage: bool = Field(default=False, alias="LIBKB_TRIAGE_COVERAGE")
+
+    # CROSS-DOCUMENT SYNTHESIS (the synthesizer route, D-061). Aggregative questions ("trends across
+    # X", "compare all the books on Y", "summarise the whole D domain") need EACH relevant page, not
+    # the cascade's best-ten basket — MultiHop measured that the cascade cannot reach past its
+    # basket. So this path scans WIDE and map-reduces. The cost is EARNED (it runs only when the
+    # router sends an aggregative question here) and BOUNDED by these knobs: the map reads on the
+    # LITE tier, TRUNCATED, and in PARALLEL, so a synthesis is a handful of cheap calls and the
+    # reducer's bill is independent of the scan width (it sees findings, never full pages).
+    #   coverage_n — how many pages the scan ranks (the sieve's width; free, no LLM).
+    #   map_n      — how many of those get a MAP call (the real cost cap).
+    #   map_chars  — truncate each page body for its map call, so one giant page can't blow the map.
+    #   concurrency— parallel map workers (thread pool; the ceiling is the provider's rate limit).
+    synth_coverage_n: int = Field(default=40, alias="LIBKB_SYNTH_COVERAGE_N")
+    synth_map_n: int = Field(default=12, alias="LIBKB_SYNTH_MAP_N")
+    synth_map_chars: int = Field(default=2000, alias="LIBKB_SYNTH_MAP_CHARS")
+    synth_concurrency: int = Field(default=6, alias="LIBKB_SYNTH_CONCURRENCY")
+
+    # QUERY DECOMPOSITION (the decompose route). A COMPOUND question ("compare the policy before AND
+    # after the change, and which applies to international orders") bundles ≥2 distinct needs; a
+    # single BLURRED query vector ranks none of the parts' pages reliably into a small basket — the
+    # measured cause of the comparison/temporal gap (SCORECARD §2.3/§3: the sieve has ALL evidence
+    # at k=20 for 93.5%, but only 29.6% at k=3). So a lite call splits the question into standalone
+    # sub-questions, each retrieved SHARPLY in parallel, and their union combined in ONE answer
+    # call — the Step-Functions "decompose → parallel retrieve → combine → generate" pattern, home-
+    # grown. Cheaper than synthesize (no per-page LLM map). Bounded by these knobs; the route defers
+    # to the cascade whenever the question is not genuinely compound.
+    # ⚠️ MEASURED AND REFUTED (SCORECARD §3.2): forced against the cascade on MultiHop it LOST
+    # comparison 74.1%→63.0% and temporal 83.3%→66.7%, and not from starvation — fed MORE evidence
+    # than the baseline it still lost, give-ups turning into wrong answers. So the route is NOT
+    # registered by default: the router can never pick it, and it costs nothing. The engine, prompts
+    # and tests stay, and this knob re-registers it so the measurement is reproducible.
+    enable_decompose_route: bool = Field(default=False, alias="LIBKB_ENABLE_DECOMPOSE")
+    decompose_max_subqs: int = Field(default=4, alias="LIBKB_DECOMPOSE_MAX_SUBQS")
+    decompose_per_q: int = Field(default=3, alias="LIBKB_DECOMPOSE_PER_Q")  # pages opened per sub-q
+    decompose_max_page_tokens: int = Field(default=3000, alias="LIBKB_DECOMPOSE_MAX_PAGE_TOKENS")
+    decompose_concurrency: int = Field(default=4, alias="LIBKB_DECOMPOSE_CONCURRENCY")
 
     routing_mode: Literal["book", "shelf"] = Field(default="shelf", alias="LIBKB_ROUTING_MODE")
 

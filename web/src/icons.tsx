@@ -32,6 +32,8 @@ export type IconName =
   | "foot"
   | "dot"
   | "bmark"
+  | "pencil"
+  | "plus"
   | "alert";
 
 interface IconProps {
@@ -186,6 +188,10 @@ export function Icon({ name, size = 18, sw = 1.7, style }: IconProps): ReactElem
         return [C(12, 12, 3, true)];
       case "bmark":
         return [P("M7 4h10v16l-5-4-5 4z")];
+      case "pencil":
+        return [P("M4 20l.9-3.6L15.5 5.8a2 2 0 0 1 2.8 2.8L7.6 19.1 4 20z"), L(13.7, 7.6, 16.4, 10.3)];
+      case "plus":
+        return [<path key="plus" d="M12 5v14M5 12h14" {...stroke} strokeWidth={2} />];
       case "alert":
         return [P("M12 4l9 16H3z"), L(12, 10, 12, 15), C(12, 17.6, 0.3, true)];
     }

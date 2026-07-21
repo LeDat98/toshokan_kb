@@ -8,12 +8,12 @@
   "parent_id": null,
   "see_also": [],
   "stats": {
-    "n_shelves": 4,
-    "n_books": 6,
-    "n_pages": 16,
+    "n_shelves": 12,
+    "n_books": 35,
+    "n_pages": 268,
     "last_ingest_at": null
   },
   "uncatalogued": false,
   "created_at": "2026-07-11T07:56:36.746302Z",
-  "updated_at": "2026-07-11T07:56:37.279279Z"
+  "updated_at": "2026-07-16T15:13:07.402800Z"
 }
