@@ -145,6 +145,419 @@ only (a) shortcut to a page or (b) hint the navigator, so an embedding miss can'
 The flywheel writes 8 rows/page (questions_per_page=4 intents × vi+en); `RETRIEVAL_DOCUMENT` at index,
 `RETRIEVAL_QUERY` at lookup (Gemini asymmetric retrieval).
 
+## D-070 · 2026-07-29 · The scoring contract is fixed: approximate the TRUE-PAGE SET. Everything else is diagnostic.
+**Set by the user, and it closes the framing question for good.** `docs/SELECTION_TARGET.md` is the
+page; this decision records why it outranks the older docs.
+
+**The mission.** The sieve hands the agent 50–100 candidates. **Only TP ≈ 2.75 documents actually
+hold the answer** (measured on MultiHop: range 2–4, never 1; comparison 2.25 · temporal 2.49 ·
+inference 3.46). The agent's job is to return a set as close to TP as it can — **containing all of
+it**, carrying little else.
+
+**Score `superset` (selection ⊇ TP). Nothing else is an objective.**
+- **Overhead of 1–2 documents is an ACCEPTABLE TRADE.** Taking fewer pages is not the failure;
+  taking fewer than TP is. A tight precise set that misses one true page is worse than a loose one
+  that contains them all.
+- **Never compare selectors at different `taken`.** That measures budget, not skill (metric bug 6.8).
+- **The basket is NOT free.** `ctx_tokens` — what the answerer must then read — is the bill the whole
+  selection layer exists to cut, and leaving it out is what made "better selection changes nothing"
+  look true. Same coverage for half the tokens IS the win.
+- **`retention` is diagnostic only.** It gives partial credit and rewards taking more.
+
+**What this immediately reclassified.** Under the old reading, `rich` "did not beat the embedder".
+Under this one: **`rich` covers TP more often than embedder@20 (64.7% vs 61.3%) while taking 7.0
+documents instead of 11.1 and costing 10.5k context tokens instead of 18.1k** — better coverage for
+42% fewer tokens. And `set`/`agent`, previously read as simply worse, have exactly the right SHAPE
+(TP+1, 70% precision against the embedder's 23%) and one specific defect: they miss a true page on
+~6 queries in 10.
+
+**So the diagnosis, and the only open direction.** The tight selectors do not fail at judging. They
+fail at **knowing they are not finished** — `set` already emits `missing`, the agent already has
+`coverage_map`, and neither uses it to check itself before committing. The fix must be a MECHANISM,
+not an instruction: `triage_fill` told the model plainly to fill its basket and moved it 4.5 → 4.7
+(D-069). **Target: superset ≥ 90% at `taken` ≈ 4, ≲6,000 ctx tokens.**
+
+Enforced in three places so it cannot drift again: `CLAUDE.md`'s session protocol reads
+`SELECTION_TARGET.md` first, `STATE.md` opens with it, and `probe-selection` now prints the
+set-vs-TP table (superset · taken · over · precision · ctx tok) instead of leading with retention.
+
+## D-069 · 2026-07-29 · The three ReAct fixes, the fill lever, and the answer-level A/B — all measured, none adopted
+Four changes, all measured on the same protocol, and the useful part is which ones failed and how.
+
+**1 · The three ReAct fixes WORKED on the mechanism and did not become a score.** Batching tool
+calls in one turn, carrying `turns_left` in every tool result, and `pool_max_steps` 6→8:
+
+| | before | after |
+|---|---|---|
+| `select` fired voluntarily | 53/150 (35%) | **49/50 (98%)** |
+| ran out of steps | 147/150 | **0** |
+| fell back to shipped triage | yes | **0** |
+| retention | 84.2% | 89.7% |
+
+And it still loses to one `rich` call (92.8%) at ~7× the calls. **Two side-effects that matter more
+than the score:** `ask_page` — the only tool that costs money — went from 6 calls in 150 queries to
+**46 in 50**; and the agent became **less** discriminating, not more (`coverage_map` was 79% of
+comparison vs 27% of inference questions; after batching it is ~85% / ~87%, near-uniform).
+**Telling it to fire everything in one turn removed the incentive to choose.** The adaptive routing
+was the best thing the loop had, and the fix for its pacing cost it. Not adopted; the fixes stay in
+the code because the loop is unusable without them, but the loop stays default-OFF.
+
+**2 · `triage_fill` is a NULL RESULT.** Told plainly that the basket is a ceiling it should
+approach, the selector went 4.5 → **4.7** pages (retention +0.2, AllGold −2.0). Under-filling is
+real and **is not reachable by instruction** — the same shape as the refuted coverage prompt
+(D-051). If it is worth closing it needs a CODE mechanism (top the basket up from the ranked pool),
+not more words. Knob kept default-OFF so the refutation is reproducible.
+
+**3 · The answer-level A/B: retention did NOT carry through. `rich` is NOT promoted.**
+`eval-multihop --limit 100`, identical cases: ANSWER **70.5% → 71.6%**, honesty 100% both, coward
+14.8% both, +22% tokens. **+1.1 points is one flipped comparison case** — below this project's own
+noise floor (§5.8). So: `rich` wins decisively on *retention* (§2.6c: matches a 20-page embedder on
+4.5 pages) and that advantage does not reach the answer. Either the basket at 20 is already large
+enough that better selection within it changes little, or **the ceiling is the ANSWERER**. Temporal
+sits at 47.8% with the gold in the basket, which points at the second — and that is now the open
+question, not selection.
+
+**4 · And the eval-integrity bug that destroyed the first attempt at (3).** Both arms came back
+bit-identical on every metric, with the `rich` arm reporting FEWER input tokens. Cause: the semantic
+answer cache (D-062) matches anything within 0.92 cosine, so arm B answered nothing and replayed arm
+A — confirmed by **zero** `cascade_done` lines against 75 in the clean re-run. **It inflated the
+score by +6.8 points** (77.3% vs 70.5% clean). `evals/multihop_answer.run()` now forces
+`enable_answer_cache=False` itself, with a regression test; it is deliberately not configurable,
+because a knob the caller must remember is one that will be forgotten. Metric bug 6.9 — and it was
+caught only because two identical arms are implausible enough to look at twice.
+
+**Where this leaves the selection work.** `rich` is the best SELECTOR measured and the honest claim
+for it is efficiency, not accuracy: **it reaches a 20-page embedder's coverage on 4.5 pages.** That
+is worth having when the basket must be small (cost, latency, a small corpus) and is worth nothing
+at basket 20 on this corpus. Default stays `lean` until a regime exists where the basket is the
+binding constraint.
+
+## D-068 · 2026-07-29 · MEASURED: at an equal page budget the agent beats the sieve by ~28 points. The founding comparison was confounded.
+**The premise this entire research thread was built on is wrong, and the correction is the finding.**
+
+Probe 2c said: *triage keeps 69% AllGold, the embedder's top-10 keeps 75%* — the selector loses to
+the sieve. The artifact, D-064, the research notes and every tier in them were written to close that
+gap. `probe-selection` (150 MultiHop queries, window 50, gemini-3.5-flash, one shared pool per
+query) reproduced it at basket 20: `embedder` **89.0%** retention, no LLM arm above it.
+
+**The control nobody had run.** The LLM selectors take **3.4–4.4** pages. The embedder arm takes all
+**20**. Retention rewards taking more, so the comparison was measuring basket size. The embedder's
+own curve costs nothing to produce (0 LLM calls): retention **53.6 / 59.7 / 63.7 / 77.7 / 89.0%** at
+basket 3 / 4 / 5 / 10 / 20.
+
+**At an equal budget it inverts:**
+
+| arm | pages | retention | AllGold |
+|---|---|---|---|
+| embedder | 4.0 | 59.7% | 21.3% |
+| **rich** | **4.1** | **88.1%** | **58.7%** |
+| headers (shipped) | 4.4 | 86.6% | 57.3% |
+| set | 3.6 | 82.6% | 50.0% |
+| trace | 3.4 | 79.7% | 42.7% |
+
+`rich` retains **+28.4 points** over the embedder on the same number of pages, and lands within
+**0.9 points** of what the embedder needs **five times** as many pages to reach. **The agent is not
+worse at picking. It is ~5× more page-efficient, and it was being scored against an opponent
+allowed five times the budget.**
+
+**Decisions this settles:**
+1. **`triage_card=rich` (Tier 0) is the best selector measured** — +1.5 retention over shipped
+   `headers` on *fewer* pages, +2.4 on `comparison`. One call, no extra call, +56% input tokens.
+   It is the arm to promote once an answer-level A/B confirms retention carries through.
+2. **`trace` — the coverage map — is REFUTED as delivered.** Worst LLM arm (79.7%) and the fewest
+   pages (3.4). Handing the model a map of which candidate covers which part appears to *convince
+   it that it is done*: it fills the named parts and stops. Same shape as the refuted coverage
+   PROMPT (D-051) — the tool computes correctly, and telling the agent the answer makes it less
+   thorough. The tool stays (`pooltools` is used by the agent loop); the `trace` MODE does not
+   become a default.
+3. **`set` likewise underperforms `headers`** (82.6 vs 86.6) on fewer pages — same mechanism.
+4. **The real defect is UNDER-FILLING, not mis-picking.** Every selector may take 20 and takes 3–4.
+   Retention tracks pages-taken almost perfectly across arms. **That is the highest-value untried
+   experiment in the project** and it is one prompt change plus one arm: make the selector fill its
+   basket and see whether ~5× efficiency converts into an outright win over embedder@20.
+
+5. **The ReAct loop routes tools adaptively — and still loses to one call.** Same 150 queries:
+   retention **84.2%** at 4.4 pages and **7.7 calls/query**, against `rich`'s 88.1% at 4.1 pages and
+   ONE call. But the telemetry says the routing works: `coverage_map` on ~79% of comparison and ~75%
+   of temporal questions versus ~27% of inference — **the agent worked out unprompted that a
+   multi-part question needs a coverage map and a single-fact one does not** — and it spent the paid
+   tool (`ask_page`) six times in 150 queries. **The defect is that it never commits:** `select`
+   fired voluntarily on 53 of 150; **147 hit the step ceiling** and were closed out. It issues
+   `find_in_candidates` one pattern per turn (~4.2/query) and the budget dies before it decides.
+   Untried fixes: batch the tool calls (the loop already counts a multi-tool turn as one step), or
+   show it a visible commit deadline. **Not adopted, and not refuted either** — *right instincts, no
+   closing move* is a different verdict from *worse at selecting*, and it is the one the data
+   supports. It also vindicates the scope rule (D-066): the tools are worth having; what is unproven
+   is this loop's pacing.
+
+**Method note, and it is the reusable part.** Two independent measurements — probe 2c and the first
+pass of this one — carried the same confound, and it survived because "retention" reads like a
+quality metric while behaving like a budget metric. The control that exposed it was FREE. *Before
+comparing two selectors, equalise what they are allowed to take.* Recorded as metric bug 6.8.
+
+## D-067 · 2026-07-29 · Pool tools, a ReAct loop with budgets in code, and tool calling opened to DashScope
+The first build under D-066's scope rule. Three things, all default-OFF, none of them a retriever.
+
+**1 · Pool tools (`agent/pooltools.py`) — 0 LLM calls.** They answer, over the 50–100 candidates the
+sieve already proposed, questions the agent otherwise guesses at from a section title:
+- `coverage_map` — split the question into parts, show which candidate covers which, computed from
+  the page text. Reports the parts NO candidate covers, and offers a greedy minimal covering set.
+  This is the direct attack on the measured multi-hop floor (comparison 74%, temporal 58%): one
+  blurred query vector ranks no part sharply, and a pointwise selector cannot notice it has covered
+  the same half twice. A part counts as covered at **half** its content words — not *any*, which
+  would make every page cover every part through one shared word (that is BM25's summing failure,
+  D-065, and this thresholds per part instead).
+- `find_in_candidates` — literal/regex search across candidate bodies, returning the SECTION each
+  hit sits in. **This is not D-065 re-opened.** D-065 measured BM25 fused into the SIEVE across all
+  57,638 documents and it lost; there is no ranking here to corrupt, and its 0.6%-complement figure
+  is about documents never retrieved at all. Different question, still open.
+
+**2 · `triage_mode` gains two shapes.**
+- `"trace"` — `set` selection with the coverage map handed to it. **Same call count as `set`.** The
+  block is not another model's opinion; it is arithmetic over the page bodies.
+- `"agent"` — a ReAct loop (`agent/poolagent.py`) where the librarian is given the tools and decides
+  what to check: `find_in_candidates` / `coverage_map` / `read_section` (free) and `ask_page` (one
+  lite call, "does THIS page answer it? quote the line"), ending at `select`.
+
+**Why the loop is not the walk** (refuted as the default, D-036, 9–13 calls and O(T²)): the walk
+searched a TREE, so a wrong turn at depth 1 was unrecoverable. Here the candidate set is fixed
+before the loop starts and every tool reads only from it — the pool is a fence, and a model naming a
+page outside it is told so rather than quietly given a best guess. The worst a bad tool call costs
+is one step.
+
+**Budgets are enforced in CODE, never in the prompt** (D-008). Three independent ceilings —
+`pool_max_steps` (6), `pool_max_lite_calls` (3), `pool_max_reads` (6) — and running out does NOT
+fail the turn: the loop is closed out with one forced `select`, because a librarian out of time
+still hands over what he found. If even that selects nothing, `_triage_agent` falls back to the
+shipped triage: an agent that spent its budget learning nothing must not also cost the reader the
+answer (that is D-035 with extra steps).
+
+**3 · Tool calling opened to DashScope.** It used to raise, on the grounds that a cheap model fails
+at navigation (D-027) and that Gemini's thought-signature echo (D-017) has no counterpart. Both
+facts hold — but they are arguments about the WALK. Refusing by provider made the 6×-cheaper tier
+untestable on the pool tools, so the refusal became a measurement. `_dashscope_messages` /
+`_dashscope_tool_calls` do the OpenAI-shaped plumbing; `ToolCall.call_id` and `ToolResponse.call_id`
+are additive (Gemini leaves them None). **VERIFIED LIVE on qwen-plus** (`tests/llm/
+test_tool_calling.py`, 4/4): it emits a call with parseable arguments and an id, the result
+round-trips and is used in the answer, and it accepts the real pool-agent schemas including
+`select`'s nested array-of-objects. Bedrock and Ollama still raise.
+
+Measurable as `probe-selection` arms `trace`, `trace+rich`, `agent`. **No arm has been run** — none
+of this is a claim yet. 28 new LLM-free tests; the two hardest assert the fence and the budgets.
+
+## D-066 · 2026-07-29 · Every retrieval method from here is an AGENT TOOL over the bounded candidate pool — not a change to the sieve
+**The scope rule, set by the user, and it settles which experiments are even on-topic.**
+
+The sieve is not the bottleneck and has not been for two sessions: FiQA R@100 = **0.920**, MultiHop
+AllGold@20 = **93.5%**. The evidence is almost always already in the top 50–100. What loses it is
+**selection** — the triage keeps 69% of the gold where taking the embedder's own top-10 keeps 75%.
+
+So from now on a method must be shaped as a **tool or skill the agent uses on the 50–100 candidates
+the cascade already proposed**. Its job: stop the agent from having to *guess from titles* which
+page holds the answer, and let it **trace** to the likely ones. Keyword/exact search is one such
+tool, not the point; the point is the shape.
+
+**The test before building or measuring anything: does this run over the WHOLE CORPUS, or over the
+candidate pool?** Whole corpus ⇒ wrong frame, wrong question, wasted run.
+
+**Applied to what already exists:**
+- `triage_card=rich` (D-064) — on-frame: it is exactly "give the agent more than titles".
+- `triage_mode=set` (D-064) — on-frame: the agent choosing a covering subset of the pool.
+- `probe-selection` (D-064) — on-frame: it holds one candidate pool fixed and varies the selector.
+- **D-065 (BM25) — OFF-frame.** It measured BM25 fused with dense across all 57,638 documents, i.e.
+  as part of the SIEVE. That answers "should BM25 help retrieve?" (measured: no, decisively) and it
+  stays valid for that question. It does **not** answer "does an exact-search TOOL over the 50–100
+  candidates help the agent select?" — and its 0.6%-complement figure does not bear on it either,
+  because that figure is about documents the embedder never retrieved, whereas here the documents
+  are already retrieved by definition. **That question is open and is the on-frame version.**
+
+## D-065 · 2026-07-29 · Hybrid BM25 re-tried on the corpus that should have favoured it — D-032 CONFIRMED, and my own two rescue hypotheses refuted
+**The challenge was fair and it was the user's.** D-032 refuted BM25 fusion, but on two query sets
+adversarial to BM25 *by construction*: LLM-generated questions written FROM the pages being searched
+(metric bug 6.4), and **cross-lingual** Vietnamese paraphrases against English pages — where BM25
+matches tokens across languages that share almost none. One run, in a regime where the mechanism
+could not fire, should not close a question for good. So it was re-run properly.
+
+**And a second suspect I raised: our own configuration.** `_fts_terms` ORs every word of a question
+and filters nothing, and BM25 sums a contribution per matched term — so a document echoing six
+common words can outrank the one document carrying the rare word. (`sections.py` has a vi+en
+stopword list; the lexical path never used it.) A plausible config bug, worth separating.
+
+**The measurement (`libkb probe-lexical`, `evals/lexical.py`).** FiQA: 57,638 documents, 648
+questions real people wrote, human qrels, same language, real lexical overlap, vectors already
+cached ⇒ **0 generation calls**. BM25 is deliberately the one SQLite FTS5 would run (k1=1.2, b=0.75,
+`unicode61 remove_diacritics 2`, no stemming), so a number here is a claim about production.
+
+| arm | nDCG@10 | R@10 | R@100 |
+|---|---|---|---|
+| **dense** | **0.621** | **0.701** | **0.920** |
+| BM25 | 0.235 | 0.298 | 0.512 |
+| hybrid RRF (today's `hybrid_shortlist`) | 0.440 | 0.518 | 0.877 |
+| + stopword-filtered query | 0.441 | 0.530 | 0.880 |
+| + fused only on rare terms (df ≤ 1%) | 0.436 | 0.549 | 0.885 |
+
+**Two correctness checks are built into the run**, because this project has been misled by its own
+metrics seven times: the dense arm reproduced §2.2's **0.621** to three decimals, and our BM25 landed
+at **0.235 against BEIR's published 0.236**. A harness that cannot reproduce a known number may not
+be used to refute one.
+
+**Findings, in order of what they cost me:**
+1. **D-032 replicates.** Fusion costs −0.18 nDCG@10 in the regime chosen to favour BM25.
+2. **My config hypothesis is REFUTED.** Stopword filtering: +0.001. Rare-term gating: −0.004.
+3. **And the question fusion cannot answer — is there a hidden complement?** Measured separately,
+   because "does fusing help" and "does the weak ranker see what the strong one cannot" come apart:
+   of **1,706 gold documents, BM25 finds 10 (0.6%) that dense misses at k=100**, in 10 of 648
+   queries; of the 16 queries dense misses entirely it rescues 2. **0.6% is therefore the ceiling on
+   what a PERFECT trigger could add** — which closes the escalation/agent-tool design too, not just
+   fusion.
+
+**Mechanism — the same one as D-048.** A strong first stage leaves a second signal nothing to add,
+and RRF weights both rankers equally, so mixing a 0.235 ranker into a 0.621 one lands at 0.44.
+
+**Scope, stated so this is not over-read a second time.** FiQA is conversational prose. A corpus
+whose queries carry hard identifiers — an article number, a SKU, an error string, a function name —
+is a different population and is what lexical search exists for. The claim is: **on prose knowledge
+bases with a strong embedder, lexical adds ~nothing and no wiring fixes that.** Coding agents lean
+on `grep` because code is identifier-dense and has no comparable embedding index; that regime is not
+ours. Re-open this when a corpus looks like that one — and `probe-lexical` will be here to settle it
+in one free run.
+
+`hybrid_shortlist` stays OFF, and it is now off on evidence rather than on one narrow run. Two
+incidental facts recorded while looking: `hybrid_lookup` is only reachable from the WALK's shortlist
+tool (`agent/tools.py`), so the cascade — the default since D-036 — never touched it; and a `text`
+row stores an EMPTY display text, so `questions_fts` would have indexed empty strings anyway. The
+FTS-source fix that was queued behind this measurement is therefore **not** being made: it would
+only have made a dead signal reachable.
+
+## D-064 · 2026-07-29 · Stop trying to out-RANK the embedder. Enrich the CARD and select a SET — with the probe that decides it
+**The finding this answers.** Probe 2c (MultiHop n=150): the LLM triage keeps **69% AllGold**; just
+taking the embedder's own **top-10 keeps 75%**. The selector — the "active seeker" the whole project
+is named for — **loses to the sieve it was meant to improve.** The obvious fix was a reranker, and
+that was already measured and REFUTED (D-048: qwen3-rerank on FiQA top-50 HURT R@1 by 5–9 pts,
+because a strong first stage leaves a reranker nothing to add).
+
+**The reframe (from a literature pass, notes in `.agent/private/`).** "AI selection loses" is not a
+verdict on AI selection. It is a verdict on the **single weakest configuration**, and our triage
+hits three of its axes at once: *pointwise* (each candidate judged alone), *binary* (take/leave,
+never "what does this ADD"), and *titles-only* (~59 tokens of section headings). Every comparative
+selection study ranks exactly that configuration last. So the lever is not a better RANKER — that
+door is closed by D-048 — but the two axes a reranker never touched. Both are different
+**objectives**, not better scorers, which is why D-048's mechanism does not reach them.
+
+**Shipped, both default-OFF (the measured-safe state), both zero new LLM calls:**
+1. **`triage_card=rich` (Tier 0)** — the card carries `triage_passages` query-relevant passages
+   instead of one, shows the passage *and* the matched catalog row (the lean card made them
+   mutually exclusive for no reason — "what is this page FOR" and "what does it say about YOUR
+   question" are different facts), and MARKS the section titles whose *body* overlaps the query.
+   All model-free, computed from the body already fetched. This is Anthropic's Contextual Retrieval
+   move (context before embedding, −35% retrieval failures) done at query time for $0.
+2. **`triage_mode=set` (Tier 2)** — one call over the SAME cards, asking *"which pages TOGETHER
+   cover this question?"* instead of *"is this page relevant?"* one at a time. Every pick must state
+   what it contributes that the others do not, and `missing` names what no candidate covers (the
+   widen round currently has to infer that). Section naming is KEPT — the refuted `read` selector
+   (D-053) picked whole pages and short-circuited the last-resort net the accuracy rides on.
+
+**And the thing that makes them claims rather than hopes: `libkb probe-selection`.** Every arm
+(`embedder` · `headers` · `rich` · `set` · `set+rich` · `read`) runs over ONE shared candidate pool,
+embedded once — so a difference between arms is the selector and nothing else. The headline metric
+is **retention**: *of the gold the sieve ALREADY put in the pool, how much did the selector keep?*
+`embedder` is the do-nothing baseline; an arm below it made things worse by choosing. Retrieval
+only — no answer, no judge — so an arm costs one call per query and is not confounded by the
+answerer. A query whose gold never entered the pool is a SIEVE failure and is excluded from
+retention (it shows up in `ceiling` instead). The run **prices itself on 3 real candidate pools and
+stops** unless `--yes`.
+
+`query_snippet` is left BIT-IDENTICAL to the version D-050's +1.7 was measured on (its heading-
+skipping improvement lives only in the new `query_passages`) — a shipped baseline that quietly
+improves is a baseline you can no longer compare against.
+
+**Not adopted, deliberately:** *setwise* tournament selection (Zhuang, SIGIR 2024) — it costs k
+comparison calls where set-selection costs one, and SetR-style set selection beats listwise
+rerankers on exactly our metric. **No arm re-runs a cross-encoder** (D-048 stands).
+
+## D-063 · 2026-07-28 · Ollama is the fourth provider — open weights, one code path for local and cloud, generation only
+The user wants a cheaper answer/generation tier on open-weight models. Added Ollama alongside Gemini,
+DashScope and Bedrock, under the SAME rule as the others (D-016): `llm/client.py` stays the single
+gateway, routing is by MODEL NAME, and nothing else in `libkb` learns a provider exists.
+
+- **The prefix is EXPLICIT: `ollama/…`.** The other providers route on a bare vendor string
+  (`qwen`, `anthropic.`), and that rule breaks here — Ollama serves `qwen3.5`, `gemma4` and even
+  `gemini-3-flash-preview` under its own roof, so a bare name would be captured by
+  `dashscope_prefixes` or fall through to Gemini. `LIBKB_MODEL=ollama/gpt-oss:120b-cloud` is then the
+  entire configuration, and `Settings._split_ollama_models` re-adds a missing prefix on menu entries
+  so a mis-typed one cannot silently be billed to Gemini.
+- **LOCAL and CLOUD are one code path**, because Ollama Cloud speaks the same `/api/*` protocol as
+  the local daemon and differs only by host + bearer token: `LIBKB_OLLAMA_HOST` +`OLLAMA_API_KEY`.
+  "Where does it run" is deployment, not architecture, and it should not be a branch in this file.
+- **The NATIVE API, not the OpenAI-compatible shim, and not for purity — for two properties:**
+  (a) `format: <json schema>` is enforced by constrained decoding, which is the structural fix for
+  the D-040 class of defect (DashScope does *not* enforce a schema; a malformed reply crashed the
+  parser and 439/2,079 pages silently left the corpus). (b) `think` lets us turn a reasoning model's
+  reasoning OFF — most Ollama cloud models reason by default, and on a triage or question-generation
+  call every reasoning token is GPU-time we are billed for and did not want. Bonus: no new dependency
+  (httpx is already required), unlike `openai` for DashScope and `boto3` for Bedrock.
+- **Tool calling is refused, as for every non-Gemini provider** — even though Ollama models DO
+  advertise tools. The walk echoes Gemini thought-signatures (D-017) with no counterpart here, and
+  navigation is the one job a cheap model MEASURABLY fails (D-027). The cascade is tool-free, so
+  every Ollama model runs the default retrieval path; only `retrieval_mode=walk` is closed to them.
+- **Fails CLOSED, twice over.** An empty `message.content` RAISES instead of returning `""` — the two
+  ways to get one are both silent (a thinking model that spent its whole budget reasoning, and a
+  refusal Ollama reports as a normal 200), and an empty string would be composed into an answer.
+  And an embed batch that returns fewer vectors than inputs raises rather than mis-align the catalog.
+- **The embedder does NOT move, and that is the deliberate half of this decision.** Ollama Cloud
+  hosts no embedding model at all (its embedders are local-only), and any Ollama embedder is a
+  different coordinate system from `gemini-embedding-001` — so switching `LIBKB_EMBED_MODEL`
+  invalidates every catalog row and every retrieval number in the SCORECARD. Generation moves first:
+  cheap, reversible, and A/B-able against the numbers we already have. The embed path is IMPLEMENTED
+  (`_embed_ollama`, with `ollama_embed_query_prefix` standing in for gemini's task-type asymmetry,
+  which open embedders express as a query-side instruction prefix) so the head-to-head is one
+  `reindex --fresh` into a separate db — never a halfway switch.
+- **A side-fix the fourth provider forced:** `GET /api/models` labelled every non-Gemini model
+  `dashscope` and gated its availability on the DashScope key — so a Bedrock model already showed as
+  unavailable when only AWS was configured. Replaced by `LLM.provider_of()`, one place, and an
+  Ollama entry is available if the host is local (no key needed) or a cloud key is set.
+- Still UNMEASURED, and must not be claimed until it is: open-weight answer quality on this library.
+  The Qwen-vs-Gemini A/B was never run either (SCORECARD §5.2); this adds a third arm to that gap.
+
+## D-062 · 2026-07-20 · Multi-turn + a semantic answer cache + a cross-document synthesis route (and decompose, refuted)
+The product session. Four capabilities, each shaped by the same constraint the retrieval redesign set:
+**keep the answer call single-shot — never let history or aggregation re-inflate it into an O(T²) walk.**
+
+- **Multi-turn without O(T²)** (`conversation/store.py` + `agent/contextualize.py`). A transcript store
+  (conversations + messages, same gitignored db) persists every turn; a *lite* call rewrites a
+  follow-up ("tell me more about it") into a STANDALONE query BEFORE retrieval. History touches only
+  the cheap rewrite — the expensive cascade call never sees it. No-op and free when there is no history
+  (CLI/eval unchanged). `enable_context_rewrite` default-on. Sidebar: title = first user question,
+  editable, deletable, pin ≤5 (D-013 English UI).
+- **Semantic answer cache** (`cache/store.py` + `cache/lookup.py`), default-ON. A grounded, confident
+  answer is stored keyed by its query embedding; a later paraphrase within cosine threshold returns it
+  with **0 LLM calls**. Honesty is not traded for speed: **never cache a NOT_FOUND**, never cache
+  without citations, never below `answer_cache_min_confidence`. Threshold is **precision-first (0.92,
+  calibrated live)** — a cross-topic near-neighbour ("chunking in RAG") already sits at 0.875, so the
+  bar must sit above the confusers, not merely above chance. A hit is transparent (UI shows "from
+  cache" + citations); entries are curatable and page-invalidatable; a global toggle lets a user demand
+  the model answer everything. Viewable/editable in the Observatory.
+- **Synthesis route** (`agent/synthesizer.py`) for AGGREGATIVE questions ("what are the trends across
+  all X?") that no single page answers, so no index fixes. A registry route (D-061): aggregative-detect
+  (lite) → wide scan → parallel *lite* MAP per page → strong REDUCE over compact findings, cited; empty
+  harvest = honest NOT_FOUND. Defers to the cascade on a single-fact question. **UNMEASURED on purpose**
+  — it needs an aggregative held-out set before it earns a number.
+- **Query decomposition — BUILT, MEASURED, REFUTED** (SCORECARD §3.2). Split a compound question into
+  sub-questions → sharp parallel retrieval per part → one combine call. Attacked a real measured cause
+  (AllGold@20=93.5% but @3=29.6%), yet lost on qwen-plus (comparison 74.1%→63.0%, temporal
+  83.3%→66.7%) — and NOT from starvation: at `per_q=6` it read MORE pages than baseline and still lost,
+  give-ups turning into wrong answers. The split-recombine discards the joint signal a wide single-query
+  basket keeps. **Unregistered by default** (`enable_decompose_route`); engine + prompts + tests stay so
+  the measurement reproduces. Added `force_route` (measurement knob). Joins the measured-refuted list
+  alongside NMS / BM25 / cross-encoder rerank / auto / the confidence gate.
+
+The through-line: every one of these was measured to decide keep-or-discard, not applied because it is
+fashionable. Two shipped (cache, multi-turn), one shipped-but-unmeasured (synthesis, honestly flagged),
+one refuted and shelved (decompose). Also this arc: the repo was published **public** at
+`github.com/LeDat98/toshokan_kb` under **PolyForm Noncommercial 1.0.0** (source-available; MIT intended
+later) with a measured-numbers README — the private-client, retail, ai-news, benchmark and eval data
+all gitignored and verified absent from the remote (D-020).
+
 ## D-061 · 2026-07-19 · Agent architecture: home-grown runtime, open protocols (MCP/A2A/AG-UI) to spec, no framework dependency
 Plan of record: `docs/AGENT_ARCHITECTURE.md`. The silent cascade becomes a **narrated, cost-aware,
 self-reflective multi-agent orchestration**, and a foundation for skills / tool-calls / MCP that can be

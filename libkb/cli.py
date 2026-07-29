@@ -11,6 +11,24 @@ from libkb.config import get_settings
 from libkb.library.models import ROOT_ID, slugify
 from libkb.library.store import LibraryStore
 
+# Mirrored from `evals.selection` so building the argument parser does not import numpy and the
+# whole eval stack on every `libkb --help`. tests/test_selection.py asserts the two never drift.
+_SEL_ARMS = (
+    "embedder",
+    "headers",
+    "rich",
+    "rich+fill",
+    "set",
+    "set+rich",
+    "trace",
+    "trace+rich",
+    "agent",
+    "read",
+)
+_SEL_DEFAULT_ARMS = ("embedder", "headers", "rich", "rich+fill", "set", "agent")
+_LEX_ARMS = ("dense", "bm25", "bm25-stop", "hybrid", "hybrid-stop", "hybrid-rare")
+_LEX_DEFAULT_ARMS = ("dense", "bm25", "hybrid", "hybrid-stop", "hybrid-rare")
+
 
 def main(argv: list[str] | None = None) -> int:
     # Windows consoles often default to a legacy codepage (e.g. cp932) that cannot
@@ -174,6 +192,45 @@ def main(argv: list[str] | None = None) -> int:
     mh_parser.add_argument("--root", default="benchmarks/multihop")
     mh_parser.add_argument("--limit", type=int, default=None, help="Only the first N queries")
 
+    lex_parser = sub.add_parser(
+        "probe-lexical",
+        help="Does BM25 add anything to a strong embedder — and was D-032's refutation about BM25 "
+        "or about our CONFIG? Reuses the cached vectors. ZERO generation calls [P3]",
+    )
+    lex_parser.add_argument("dataset", nargs="?", default="benchmarks/fiqa")
+    lex_parser.add_argument("--split", default="test")
+    lex_parser.add_argument("--arms", default=",".join(_LEX_DEFAULT_ARMS))
+    lex_parser.add_argument(
+        "--max-df",
+        type=float,
+        default=0.01,
+        help="`rare` = a term in at most this fraction of the corpus (hybrid-rare's gate)",
+    )
+    lex_parser.add_argument("--save", default=None, help="Write the rows as JSON")
+
+    sel_parser = sub.add_parser(
+        "probe-selection",
+        help="Does the AGENT choosing pages beat the embedder's top-k? Runs each selector ARM over "
+        "ONE shared candidate pool. Retrieval only — no answers, no judge. COSTS TOKENS [P3]",
+    )
+    sel_parser.add_argument("--root", default="benchmarks/multihop")
+    sel_parser.add_argument("--limit", type=int, default=150, help="Stratified sample size")
+    sel_parser.add_argument("--seed", type=int, default=11)
+    sel_parser.add_argument(
+        "--arms",
+        default=",".join(_SEL_DEFAULT_ARMS),
+        help="Comma-separated: " + " | ".join(_SEL_ARMS),
+    )
+    sel_parser.add_argument("--fetch", type=int, default=0, help="0 = the configured window")
+    sel_parser.add_argument("--basket", type=int, default=0, help="0 = the configured basket")
+    sel_parser.add_argument("--save", default=None, help="Write the rows as JSON")
+    sel_parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Spend the generation tokens. WITHOUT it the run prices itself on a few queries and "
+        "stops — always see the bill before paying it",
+    )
+
     index_parser = sub.add_parser(
         "probe-index",
         help="Index the page's QUESTIONS or its TEXT? — embeddings only, no generation [P3]",
@@ -284,6 +341,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "bench-multihop":
         return _cmd_bench_multihop(args, settings)
+
+    if args.command == "probe-lexical":
+        return _cmd_probe_lexical(args, settings)
+
+    if args.command == "probe-selection":
+        return _cmd_probe_selection(args, settings)
 
     if args.command == "probe-index":
         return _cmd_probe_index(args, settings)
@@ -964,6 +1027,269 @@ def _cmd_bench_multihop(args, settings) -> int:
             row = next((r for r in rows if r.index == name and r.kind == kind), None)
             cells.append(f"{row.allgold[3]:>14.1%}" if row else f"{'—':>14}")
         print(f"  {name:<11}" + "".join(cells))
+    return 0
+
+
+def _cmd_probe_lexical(args, settings) -> int:
+    import json
+    from pathlib import Path
+
+    from libkb.evals import beir
+    from libkb.evals.lexical import ARMS, BM25, dense_rankings, query_terms, rank_arm
+    from libkb.llm.client import get_llm
+
+    arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
+    unknown = [a for a in arms if a not in ARMS]
+    if unknown:
+        print(f"Unknown arm(s): {', '.join(unknown)}. Choose from: {', '.join(ARMS)}")
+        return 2
+
+    root = Path(args.dataset)
+    if not root.exists():
+        print(f"No dataset at {root}")
+        return 1
+    data = beir.load(root, args.split)
+    qids = sorted(data.queries)
+    queries = [data.queries[q] for q in qids]
+    print(
+        f"{data.name}: {len(data.doc_ids):,} documents · {len(qids)} questions real people wrote · "
+        f"human qrels. Generation calls: 0."
+    )
+
+    cache = root / f"vectors-{settings.embed_model}.npy"
+    if not cache.exists():
+        print(f"No cached document vectors at {cache} — run `libkb bench {root} --yes` first.")
+        return 1
+    doc_vecs = beir.embed_corpus(data, cache, progress=lambda m: print(f"  {m}"))
+    print(
+        f"  embedding {len(qids)} questions (the only spend, ~{sum(map(len, queries)) // 4:,} tok)"
+    )
+    query_vecs = get_llm().embed(queries, task="RETRIEVAL_QUERY")
+
+    print("  building the BM25 index (no model, no network)")
+    index = BM25.build(data.doc_texts, progress=lambda m: print(f"  {m}"))
+    print(f"  {len(index.postings):,} distinct terms · mean document {index.avgdl:.0f} tokens")
+    dense = dense_rankings(doc_vecs, query_vecs, top_k=max(beir.KS))
+
+    rows: dict[str, list] = {}
+    plans = {}
+    for arm in arms:
+        ranked, plan = rank_arm(
+            arm,
+            index=index,
+            queries=queries,
+            dense=dense,
+            top_k=max(beir.KS),
+            max_df_ratio=args.max_df,
+        )
+        rows[arm] = beir.score_rankings(data, ranked, qids)
+        plans[arm] = plan
+
+    ks = "".join(f"{'@' + str(k):>9}" for k in beir.KS)
+    for metric in ("nDCG", "Recall"):
+        print(f"\n{metric}@k")
+        print(f"  {'arm':<13}{ks}")
+        for arm in arms:
+            row = next(r for r in rows[arm] if r.metric == metric)
+            print(f"  {arm:<13}" + "".join(f"{row.at_k[k]:>9.3f}" for k in beir.KS))
+
+    print("\nWhat each arm actually did:")
+    print(f"  {'arm':<13}{'queries fused':>15}{'lexical empty':>15}")
+    for arm in arms:
+        plan = plans[arm]
+        print(f"  {arm:<13}{plan.fused:>15}{plan.lexical_empty:>15}")
+
+    # COMPLEMENTARITY — the question fusion cannot answer. Fusing asks two rankers to vote on one
+    # list, so a much weaker voter drags a strong one down however it is weighted. This asks instead
+    # whether lexical retrieves gold the embedder NEVER SEES. If it does not, the case closes; if it
+    # does, the right shape is escalation (an exact-search tool), not fusion.
+    from libkb.evals.lexical import complementarity
+
+    index_of = {doc_id: i for i, doc_id in enumerate(data.doc_ids)}
+    gold_sets = [
+        {index_of[d] for d, g in data.qrels[q].items() if g > 0 and d in index_of} for q in qids
+    ]
+    lexical_only = [
+        index.search(query_terms(qt, drop_stopwords=False), top_k=max(beir.KS)) for qt in queries
+    ]
+    for depth in (10, 100):
+        comp = complementarity(gold_sets, dense, lexical_only, k=depth)
+        share = comp.rescued / max(comp.gold_total, 1)
+        print(
+            f"\nComplementarity @{depth} — does BM25 find gold the embedder never retrieves?\n"
+            f"  gold documents            {comp.gold_total:>6}\n"
+            f"  found by dense            {comp.dense_found:>6}\n"
+            f"  found by BM25             {comp.lexical_found:>6}\n"
+            f"  found by BM25 ONLY        {comp.rescued:>6}   ({share:.1%} of all gold, "
+            f"in {comp.rescued_queries} of {comp.n_queries} queries)\n"
+            f"  queries dense missed entirely {comp.dense_blind:>2} — BM25 rescued "
+            f"{comp.dense_blind_rescued} of them"
+        )
+
+    # THE TWO CORRECTNESS CHECKS. A harness that cannot reproduce a known number may not be used to
+    # refute one (SCORECARD §6 — seven metric bugs, and 6.7 is the discipline that caught them).
+    print("\nCorrectness checks — the harness must reproduce two numbers it did not choose:")
+    if "dense" in rows:
+        got = next(r for r in rows["dense"] if r.metric == "nDCG").at_k[10]
+        ok = abs(got - 0.621) < 0.01
+        print(f"  dense nDCG@10 = {got:.3f} vs SCORECARD §2.2 = 0.621  {'OK' if ok else '*** OFF'}")
+    if "bm25" in rows:
+        got = next(r for r in rows["bm25"] if r.metric == "nDCG").at_k[10]
+        ok = abs(got - 0.236) < 0.05
+        print(
+            f"  bm25  nDCG@10 = {got:.3f} vs BEIR's published FiQA BM25 = 0.236  "
+            f"{'OK' if ok else '*** OFF — do not trust the rows above'}"
+        )
+
+    if args.save:
+        Path(args.save).write_text(
+            json.dumps(
+                {
+                    arm: {r.metric: {str(k): v for k, v in r.at_k.items()} for r in rows[arm]}
+                    | {"fused": plans[arm].fused, "lexical_empty": plans[arm].lexical_empty}
+                    for arm in arms
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        print(f"\nSaved → {args.save}")
+    return 0
+
+
+def _cmd_probe_selection(args, settings) -> int:
+    import json
+    from pathlib import Path
+
+    from libkb.catalog.store import Catalog
+    from libkb.evals.selection import ARMS, build_pools, estimate, load_multihop, run
+
+    arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
+    unknown = [a for a in arms if a not in ARMS]
+    if unknown:
+        print(f"Unknown arm(s): {', '.join(unknown)}. Choose from: {', '.join(ARMS)}")
+        return 2
+
+    root = Path(args.root)
+    store = LibraryStore(settings.library_dir)
+    catalog = Catalog(settings.db_path)
+    if not catalog.count():
+        print(f"No catalog at {settings.db_path} — import the corpus with --index first.")
+        return 1
+
+    queries, key_of = load_multihop(root, store, limit=args.limit, seed=args.seed)
+    fetch_n, _, basket = settings.resolve_cascade(len(catalog.page_ids()))
+    fetch_n = args.fetch or fetch_n
+    basket = args.basket or basket
+    print(
+        f"{len(catalog.page_ids()):,} pages / {len(set(key_of.values())):,} articles · "
+        f"{len(queries):,} queries · window {fetch_n} → basket {basket} · arms: {', '.join(arms)}"
+    )
+
+    pools = build_pools(
+        queries, catalog, fetch_n=fetch_n, basket=basket, progress=lambda m: print(f"  {m}")
+    )
+
+    # PREFLIGHT — the rule is: price a run on a handful before paying for all of it. The cards are
+    # built by the same code the run uses, so this is the real prompt size, not a guess.
+    print("\nPreflight — measured on 3 real candidate pools, ZERO generation calls:")
+    print(f"  {'arm':<10}{'calls':>8}{'input tok':>13}{'card chars':>13}")
+    total_calls = total_in = 0
+    for est in estimate(pools, store=store, arms=arms, settings=settings):
+        print(f"  {est.arm:<10}{est.calls:>8,}{est.input_tokens:>13,}{est.card_chars:>13,}")
+        total_calls += est.calls
+        total_in += est.input_tokens
+    print(f"  {'TOTAL':<10}{total_calls:>8,}{total_in:>13,}")
+    print(f"  model: {settings.model} · output is small (a basket, not prose)")
+    # WHICH MODEL IS A DECISION, AND IT WAS MISSED ONCE. `LIBKB_MODEL` defaults to the strong tier,
+    # so a probe run costs ~4x what it needs to unless someone thinks about it — and the arms here
+    # are compared against EACH OTHER on one shared pool, so the tier cancels out of the comparison.
+    # Printing the model was not enough; it has to read as a choice not yet made.
+    if not settings.model.startswith(("qwen", "ollama/")):
+        print(
+            "  ⚠ this is the STRONG tier. Every arm sees the same pool, so a cheaper\n"
+            "    model measures the same DIFFERENCE for a fraction of the bill:\n"
+            "        LIBKB_MODEL=qwen-plus   (~4x less per input token)\n"
+            "    Use the strong tier only when the absolute number must line up with\n"
+            "    the SCORECARD's existing runs."
+        )
+    if not args.yes:
+        catalog.close()
+        print("\nNothing spent. Re-run with --yes to pay this and get the numbers.")
+        return 0
+
+    rows = run(
+        pools,
+        store=store,
+        key_of=key_of,
+        arms=arms,
+        settings=settings,
+        progress=lambda m: print(f"  {m}"),
+    )
+    catalog.close()
+
+    overall = [r for r in rows if r.kind == "all"]
+    ceiling = overall[0].ceiling if overall else 0.0
+    ceiling_all = overall[0].ceiling_allgold if overall else 0.0
+    print(
+        f"\nCEILING — what the shared pool of {fetch_n} contained: "
+        f"coverage {ceiling:.1%} · AllGold {ceiling_all:.1%}. No arm can exceed this."
+    )
+    tp = overall[0].tp if overall else 0.0
+    print(
+        f"\nTHE SET vs THE TRUE PAGES. Only {tp:.2f} documents actually hold the answer\n"
+        f"(TP). A good selection CONTAINS all of them and carries little else — overhead\n"
+        f"of 1-2 is a fine trade, missing one TP is not. `ctx tok` is what the answerer\n"
+        f"must then read: the real bill."
+    )
+    print(
+        f"\n  {'arm':<10}{'superset':>10}{'taken':>7}{'over':>6}{'prec':>7}{'ctx tok':>9}"
+        f"{'retention':>11}{'coverage':>10}{'empty':>7}{'calls':>7}{'in tok':>11}"
+    )
+    for row in overall:
+        print(
+            f"  {row.arm:<10}{row.allgold:>10.1%}{row.taken:>7.1f}{row.overhead:>6.1f}"
+            f"{row.precision:>7.1%}{row.ctx_tokens:>9,.0f}{row.retention:>11.1%}"
+            f"{row.coverage:>10.1%}{row.empty:>7}{row.calls:>7}{row.input_tokens:>11,}"
+        )
+    print(
+        "\nsuperset = the fraction of queries where the selection contained EVERY true\n"
+        "page. That is the number to optimise; `retention` gives partial credit and\n"
+        "rewards taking more, which is how the basket-size confound got in (metric bug\n"
+        "6.8). Compare arms at similar `taken`, and read `ctx tok` next to `superset` —\n"
+        "the same coverage for fewer tokens IS the win.  (docs/SELECTION_TARGET.md)"
+    )
+
+    kinds = sorted({r.kind for r in rows} - {"all"})
+    print("\nBy question type (retention):")
+    print(f"  {'arm':<10}" + "".join(f"{k.replace('_query', ''):>13}" for k in kinds))
+    for arm in arms:
+        cells = []
+        for kind in kinds:
+            row = next((r for r in rows if r.arm == arm and r.kind == kind), None)
+            cells.append(f"{row.retention:>13.1%}" if row and row.n else f"{'—':>13}")
+        print(f"  {arm:<10}" + "".join(cells))
+    print("\n`comparison` and `temporal` are the kinds that genuinely need >1 document — they are")
+    print("where set-selection has to prove itself, and where a pointwise selector should fail.")
+
+    # WHICH TOOLS, PER QUESTION KIND. A score says which arm won on average; it cannot say whether
+    # the loop picked the right tool for THIS question, which is the only thing a tool-using agent
+    # is for. `trace` scoring worst while applying its tool unconditionally is the warning.
+    for row in overall:
+        if not row.tools:
+            continue
+        print(f"\nTools `{row.arm}` chose, per question kind — is it routing, or is it habit?")
+        names = sorted({n for b in row.tools.values() for n in b})
+        print(f"  {'kind':<20}" + "".join(f"{n[:14]:>16}" for n in names))
+        for kind, bucket in sorted(row.tools.items()):
+            cells = "".join(f"{bucket.get(n, 0):>16}" for n in names)
+            print(f"  {kind.replace('_query', ''):<20}{cells}")
+
+    if args.save:
+        Path(args.save).write_text(
+            json.dumps([r.__dict__ for r in rows], indent=2), encoding="utf-8"
+        )
+        print(f"\nSaved {len(rows)} rows → {args.save}")
     return 0
 
 

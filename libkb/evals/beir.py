@@ -128,6 +128,20 @@ def score(
 ) -> list[BenchRow]:
     """nDCG@10 (BEIR's metric, so the number is comparable) plus Recall@k (ours, so it is
     interpretable: the cascade's whole design rests on the answer being INSIDE the shortlist)."""
+    rankings = []
+    for qi in range(len(qids)):
+        order = np.argsort(-(doc_vecs @ query_vecs[qi]))[: max(KS)]
+        rankings.append([int(i) for i in order])
+    return score_rankings(data, rankings, qids)
+
+
+def score_rankings(data: Dataset, rankings: list[list[int]], qids: list[str]) -> list[BenchRow]:
+    """The SAME metric, applied to ranked document INDICES from any retriever — dense, BM25, or a
+    fusion of them.
+
+    Split out for one reason: this project has been misled by its own measurement seven times
+    (SCORECARD §6), and the cheapest guard against an eighth is that competing arms cannot be scored
+    by subtly different code. One nDCG, one Recall, one definition of "counted"."""
     index_of = {doc_id: i for i, doc_id in enumerate(data.doc_ids)}
     ndcg = {k: 0.0 for k in KS}
     recall = {k: 0.0 for k in KS}
@@ -138,9 +152,7 @@ def score(
         if not gold:
             continue
         counted += 1
-        sims = doc_vecs @ query_vecs[qi]
-        order = np.argsort(-sims)[: max(KS)]
-        ranked = [data.doc_ids[i] for i in order]
+        ranked = [data.doc_ids[i] for i in rankings[qi][: max(KS)]]
 
         for k in KS:
             top = ranked[:k]

@@ -5,11 +5,18 @@ TOC → page to answer, instead of one-shot vector similarity. Founding requirem
 **active seeker**, and context loads **progressively** (never bulk-dump into the window).
 
 ## Session protocol — do this first
-1. Read `.agent/STATE.md` (where we are, next actions, watch-outs).
-2. Before any design change, check `.agent/DECISIONS.md` — it is append-only and settles debates.
-3. End of session: rewrite `STATE.md`, append `JOURNAL.md`, tick `ROADMAP.md` boxes.
+1. **Read `docs/SELECTION_TARGET.md`.** It is the current mission and the ONLY scoring contract for
+   the retrieval/selection layer: get the agent's chosen set as close to the true-page set (TP ≈ 2.75
+   documents) as possible — containing all of it, carrying little else. It also lists what has
+   already been refuted, so nothing is re-proposed. **It outranks any older framing in the other
+   docs.** Do not optimise `retention`, do not compare selectors at different basket sizes, and
+   never treat the basket as free.
+2. Read `.agent/STATE.md` (where we are, next actions, watch-outs).
+3. Before any design change, check `.agent/DECISIONS.md` — it is append-only and settles debates.
+4. End of session: rewrite `STATE.md`, append `JOURNAL.md`, tick `ROADMAP.md` boxes.
 
 ## Map
+- `docs/SELECTION_TARGET.md` — **the mission + the scoring contract.** Read first; outranks the rest.
 - `docs/SCORECARD.md` — **what the system actually does, measured.** Every number with its `n`, its
   regime and the command that produced it; what is NOT measured; the metric bugs that fooled us; the
   ranked backlog. **Rewrite it after every major change** — it is how a future version gets compared

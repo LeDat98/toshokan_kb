@@ -91,10 +91,63 @@ def _content_words(text: str) -> set[str]:
     return {w for w in words if w not in _STOP}
 
 
+def query_passages(
+    markdown: str, query: str, *, k: int = 1, max_chars: int = 200, skip_headings: bool = True
+) -> list[str]:
+    """The k passages of a page that most overlap the query, best first — the sieve's answer to
+    "why THIS page?", made visible to triage. MODEL-FREE and deterministic: it scores each sentence
+    by how many DISTINCT query content-words it carries.
+
+    Why more than one (the Tier-0 lever): a single sentence is a *point* estimate of relevance, and
+    on a multi-part question the one best sentence is by construction about the question's most
+    obvious half — which is exactly the failure the coverage work kept hitting. Two or three spans
+    from DIFFERENT parts of the page tell the librarian whether the page covers one part or several,
+    and that is the judgement being asked of it. Cost is ~50 tokens per extra span and zero LLM.
+
+    Spans are deduplicated by content words, so a page that repeats its thesis three times does not
+    spend the whole card saying it once per paragraph. The similarity is **symmetric** (Jaccard) on
+    purpose: a containment test lets a two-word HEADING swallow the full sentence underneath it,
+    which is precisely backwards — the short span is the one carrying no information.
+
+    `skip_headings` drops markdown heading lines, which are already listed on the card under
+    `Sections:` — quoting one back as "the relevant passage" spends tokens to say nothing. It is a
+    parameter rather than a rule because `query_snippet` is SHIPPED AND MEASURED (D-050) and must
+    keep its exact behaviour; only the new multi-passage path gets the improvement.
+    """
+    if max_chars <= 0 or k <= 0:  # the A/B off-switch: chars=0 reverts to the bare spine-label card
+        return []
+    want = _content_words(query)
+    if not want:
+        return []
+    scored: list[tuple[int, int, str, frozenset[str]]] = []
+    for order, raw in enumerate(_SENT.split(markdown)):
+        if skip_headings and raw.lstrip().startswith("#"):
+            continue
+        span = _MD_NOISE.sub("", raw).strip()
+        if len(span) < 12:
+            continue
+        words = _content_words(span)
+        hits = len(want & words)
+        if hits:
+            scored.append((-hits, order, span, frozenset(words)))
+    scored.sort()  # by descending hits, then document order — ties lean to the definitional opening
+
+    out: list[str] = []
+    taken: list[frozenset[str]] = []
+    for _, _, span, words in scored:
+        if any(len(words & seen) / max(len(words | seen), 1) >= 0.7 for seen in taken):
+            continue
+        text = re.sub(r"\s+", " ", span).strip()
+        out.append(text if len(text) <= max_chars else text[: max_chars - 1].rstrip() + "…")
+        taken.append(words)
+        if len(out) >= k:
+            break
+    return out
+
+
 def query_snippet(markdown: str, query: str, *, max_chars: int = 200) -> str:
-    """The one passage of a page that most overlaps the query — the sieve's answer to "why THIS
-    page?", made visible to triage. MODEL-FREE and deterministic: it scores each sentence by how
-    many DISTINCT query content-words it carries and returns the best.
+    """The single best query-relevant passage (D-050). A `query_passages(k=1)` wrapper, kept as its
+    own name because it is the shipped, MEASURED behaviour (+1.7 answer, 2 seeds × n=200).
 
     This restores, for a TEXT index, the discriminative line a QUESTION index gave triage for free
     (`Answers questions like: "…"`, D-035). A text row stores an empty display text (questions.py),
@@ -103,24 +156,40 @@ def query_snippet(markdown: str, query: str, *, max_chars: int = 200) -> str:
 
     Returns "" when nothing in the page overlaps the query on a content word: an honest blank beats
     a misleading first sentence. The spine label already carries the page's generic gist.
+
+    `skip_headings=False` keeps this BIT-IDENTICAL to the version the +1.7-answer number was
+    measured on. The improvement lives in `query_passages`, where it can be measured before it is
+    believed — a shipped baseline that quietly changes is a baseline you can no longer compare to.
     """
-    if max_chars <= 0:  # the A/B off-switch: chars=0 reverts triage to the bare spine-label card
-        return ""
+    found = query_passages(markdown, query, k=1, max_chars=max_chars, skip_headings=False)
+    return found[0] if found else ""
+
+
+def relevant_sections(markdown: str, query: str, *, k: int = 3) -> list[str]:
+    """Which of a page's SECTION TITLES sit on the part of the page the query touches, best first.
+
+    Titles alone are a famously bad selection signal — a section called `3.2 Analysis` says nothing —
+    and the librarian is asked to copy one back exactly. This scores each section by how much its
+    BODY overlaps the query and hands back the winners, so the card can mark them. The librarian
+    still chooses; it is given a reason to choose, which is the thing it did not have.
+
+    MODEL-FREE, computed from the body already fetched. Returns [] when nothing overlaps — an
+    unmarked list is the honest signal that the page is relevant as a whole or not at all.
+    """
+    if k <= 0:
+        return []
     want = _content_words(query)
     if not want:
-        return ""
-    best_span, best_hits = "", 0
-    for raw in _SENT.split(markdown):
-        span = _MD_NOISE.sub("", raw).strip()
-        if len(span) < 12:
+        return []
+    scored = []
+    for order, section in enumerate(split_sections(markdown)):
+        if not section.title:
             continue
-        hits = len(want & _content_words(span))
-        if hits > best_hits:  # first span wins ties → leans to the definitional opening
-            best_span, best_hits = span, hits
-    if best_hits == 0:
-        return ""
-    snippet = re.sub(r"\s+", " ", best_span).strip()
-    return snippet if len(snippet) <= max_chars else snippet[: max_chars - 1].rstrip() + "…"
+        hits = len(want & _content_words(section.body))
+        if hits:
+            scored.append((-hits, order, section.title))
+    scored.sort()
+    return [title for _, _, title in scored[:k]]
 
 
 def pick_sections(markdown: str, titles: list[str], *, max_tokens: int = 4000) -> str:

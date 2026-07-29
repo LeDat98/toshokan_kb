@@ -213,6 +213,88 @@ tested (**203 tests**), NOT committed, all default-safe.
 - [ ] Real MCP subprocess round-trip (needs `pip install -e ".[mcp]"`).
 - [ ] LLM tool-calling INSIDE the answerer (mid-compose) — deferred (native tool-calling is Gemini-only).
 
+## P4.9 — AGENT TOOLS OVER THE CANDIDATE POOL (D-066/D-067, session 13) — built, UNMEASURED
+The scope rule: a method is a TOOL over the 50–100 candidates, never a change to the sieve.
+- [x] `agent/pooltools.py` — `coverage_map` (parts → which candidate covers which → the hole → a
+  greedy covering set) and `find_in_candidates` (literal/regex, returns the SECTION of each hit).
+  Both 0 LLM.
+- [x] `triage_mode=trace` — set-selection with the coverage map handed to it; same call count.
+- [x] `triage_mode=agent` — ReAct loop over the pool + `ask_page`; budgets in CODE; forced-`select`
+  close-out; falls back to shipped triage if it still selects nothing.
+- [x] Tool calling on DashScope (the Gemini-only refusal removed) — **verified live on qwen-plus**.
+- [x] 28 LLM-free tests + `tests/llm/test_tool_calling.py -m llm` (4/4 live).
+- [ ] **RUN the arms.** `probe-selection` now has 9; none has run. Then the cheap-tier question:
+  does `agent` hold up on qwen-plus at 6× less?
+- [ ] If `agent` wins: wire the tool trace into the UI timeline (the events already exist).
+
+## P4.8 — HYBRID BM25, RE-TRIED AND CLOSED (D-065, session 13) — see SCORECARD §2.5
+D-032 refuted BM25 fusion on two query sets that were adversarial to BM25 by construction. Fair
+challenge; re-run properly.
+- [x] `libkb/evals/lexical.py` — BM25 as SQLite FTS5 would run it (k1=1.2, b=0.75, `unicode61
+  remove_diacritics 2`, no stemming), RRF, a rare-term gate, and a **complementarity** report.
+- [x] `beir.score_rankings()` split out so dense/BM25/hybrid are scored by literally the same code.
+- [x] `libkb probe-lexical` — FREE (cached vectors, 0 generation). Two built-in correctness checks.
+- [x] **RUN on FiQA.** D-032 replicates (−0.18 nDCG@10); stopword filtering +0.001; rare-term gating
+  −0.004; BM25 finds **0.6%** of gold that dense misses at k=100 → no complement to escalate to.
+- [x] 25 LLM-free tests. `hybrid_shortlist` stays OFF, now on external evidence.
+- [ ] ~~Fix the FTS source (it indexes an empty column under a text index)~~ **DROPPED** — it would
+  only make a dead signal reachable. Revisit only with an identifier-dense corpus (article numbers,
+  SKUs, error strings), which is a different population and the one lexical search exists for.
+
+## P4.7 — THE SELECTION LAYER (D-064, session 13) — built, UNMEASURED
+The step the project is named for is the one that loses: triage keeps 69% of the gold, the
+embedder's own top-10 keeps 75% (probe 2c). A reranker is not the fix — refuted (D-048). So attack
+the axes a reranker never touched: what the selector SEES, and what it is ASKED.
+- [x] **Tier 0 — `triage_card=rich`** (`cascade.build_card`): `triage_passages` query-relevant spans
+  instead of one, passage AND matched catalog row together, section titles whose *body* overlaps the
+  query marked `▸`. Model-free (`query_passages`, `relevant_sections`); zero new LLM calls.
+- [x] **Tier 2 — `triage_mode=set`** (`cascade._triage_set` + `prompts/select_set.md`): one call over
+  the same cards asking for a COVERING SET; each pick states what it adds; `missing` names the hole.
+  Section naming kept (D-053's `read` lost partly by taking whole pages).
+- [x] **The deciding experiment — `libkb probe-selection`** (`evals/selection.py`): arms
+  `embedder|headers|rich|set|set+rich|read` over ONE shared candidate pool; headline metric
+  **retention**; preflight prices the run on 3 real pools and stops without `--yes`. 25 LLM-free tests.
+- [x] SCORECARD reconciled with D-048 (§5 and the backlog still called the reranker "not run").
+- [ ] **RUN THE ARMS.** Nothing above is a claim until this produces a column of numbers. Then either
+  flip a default and confirm on `eval-multihop`, or write the null result down and go to Tier 3.
+- [ ] Tier 1 (setwise) deliberately skipped — k calls vs one; revisit only if Tier 2 wins but is noisy.
+- [ ] **Tier 0b** — ingest-time contextual summary (real Contextual Retrieval, moves the SIEVE not the
+  selector) · **Tier 3** — IRCoT loop + note compression, gated by a CRAG-style evaluator.
+- [ ] FiQA *selection* vs qrels — needs a `load_fiqa` loader; the probe is dataset-agnostic by design.
+
+## P4.6 — PRODUCT SESSION + PUBLISHED (D-062) — see SCORECARD §3.2
+Product-level capabilities, then a public release.
+- [x] **Multi-turn chat + history** — `conversation/store.py` (transcripts, same gitignored db) +
+  `agent/contextualize.py` (a lite call rewrites a follow-up into a STANDALONE query BEFORE retrieval,
+  so history never enters the expensive cascade — the O(T²) trap the redesign avoids). Sidebar: title =
+  first question, editable/deletable, pin ≤5. `enable_context_rewrite` default-on, free with no history.
+- [x] **Semantic answer cache** (`cache/`) default-ON — a grounded, confident answer returns for a
+  paraphrase with **0 LLM calls**. Honesty rules: never cache NOT_FOUND / uncited / low-confidence;
+  precision-first threshold **0.92** (a cross-topic near-neighbour sits at 0.875). Curatable + toggle in
+  the Observatory. Transparent ("from cache" + citations).
+- [x] **Synthesis route** (`agent/synthesizer.py`) for aggregative questions — registry route, wide scan
+  → parallel lite MAP → strong REDUCE, cited; empty = NOT_FOUND. **UNMEASURED on purpose** (needs an
+  aggregative held-out set; SCORECARD §5.6).
+- [x] ~~**Query decomposition**~~ **BUILT, MEASURED, REFUTED** (SCORECARD §3.2). Split→retrieve-per-part
+  →combine lost comparison 74.1%→63.0%, temporal 83.3%→66.7% on qwen-plus, and NOT from starvation. The
+  split discards the joint signal a wide single-query basket keeps. UNREGISTERED by default
+  (`enable_decompose_route`); engine + prompts + tests kept so it reproduces. Added `force_route` knob.
+- [x] **Observatory wired to REAL traffic** — KPIs + trajectories + trace replay from `GET /api/observatory`
+  over the TrajectoryStore (`reason`/`recent()`/`status_counts()`). REMAINING: analyzer-driven misroute
+  heatmap + suggested fixes (shown as a labelled PREVIEW, never fabricated).
+- [x] **PUBLISHED** — repo public at `github.com/LeDat98/toshokan_kb`, **PolyForm Noncommercial 1.0.0**
+  (source-available; MIT intended later), measured-numbers README. The private-client, retail,
+  ai-news, benchmark and eval data + the proposal deck gitignored and **verified absent** (D-020).
+- [x] **Client data pulled out of the repo (housekeeping).** `library/domains/<client>/` moved to a
+  sibling folder outside the project; the `.gitignore` entry that named the client removed. Tracked
+  tree is now client-name-free. (Name persists in older git history on the remote → history-rewrite is
+  the user's call.)
+- [~] **A cost-accounting feature was built this session, then REMOVED at the user's request** (billing
+  must not reach the public repo). Its removal also dropped the cache-off-in-eval fix, so that
+  eval-integrity bug (a re-run replays cached answers to the judge, inflating the score) is live again
+  — re-apply as a standalone correctness fix if wanted. Incident recorded only in the gitignored
+  `.agent/private/COST_LEDGER.md`.
+
 ## P4 — Maintenance loop
 - [ ] `maintenance/rebalance.py` (suggest/apply split, merge; eval-gated, auto-revert)
 - [ ] `library/aliases.py` demand-driven creation from analyzer fixes

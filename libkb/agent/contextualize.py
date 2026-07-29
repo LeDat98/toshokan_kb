@@ -51,9 +51,7 @@ class ContextResult:
     thought: str = ""  # a first-person line for the timeline when a rewrite happened (D-061)
 
 
-def contextualize(
-    query: str, history: list[dict], llm: LLM, settings: Settings
-) -> ContextResult:
+def contextualize(query: str, history: list[dict], llm: LLM, settings: Settings) -> ContextResult:
     """Rewrite a follow-up into a standalone query using recent history; else return it unchanged.
 
     `history` is the PRIOR turns (not the current message), oldest → newest, each `{role, text}`.

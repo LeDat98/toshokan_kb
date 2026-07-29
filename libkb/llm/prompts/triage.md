@@ -28,7 +28,7 @@ So the bar is **"could this help?"**, not "am I certain this is the one?".
   usually the strongest signal you have. Trust it over a terse section title.
 - Two pages that cover the same ground are not a waste — they corroborate. Take the second one if it
   might add anything.
-{{coverage}}
+{{coverage}}{{fill}}
 **Return an empty basket ONLY if every candidate is plainly about a different subject** — the reader
 asked about turbochargers and the library holds retail analytics. If a candidate is *about the right
 subject but you cannot tell whether it goes deep enough*, **take it.** That is what the basket is

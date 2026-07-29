@@ -1,8 +1,283 @@
-# STATE — as of 2026-07-19 (session 10)
+# STATE — as of 2026-07-29 (session 13)
+
+## 🎯 READ `docs/SELECTION_TARGET.md` FIRST — the mission and the ONLY scoring contract
+Set by the user 2026-07-29 and it **supersedes every earlier framing in this file.**
+
+**Mission:** the sieve hands 50–100 candidates; only **TP ≈ 2.75** of them hold the answer. Get the
+agent's chosen set as close to TP as possible — **containing all of it**, carrying little else.
+
+**Score `superset` (selection ⊇ TP). Nothing else.** Overhead of 1–2 documents is a fine trade;
+missing ONE true page is not. Never compare selectors at different `taken`. The basket is not free —
+always report `ctx_tokens`. `retention` gives partial credit and rewards taking more: diagnostic
+only (that confusion is metric bug 6.8 and it inverted the project's conclusion for sessions).
+
+Where it stands (n=150, qwen-plus): `rich` **64.7%** superset / 7.0 taken / 10.5k ctx · `headers`
+58.7% / 6.5 · `set` 42.7% / **3.0 taken, 71% precision** · `agent` 36.7% / 3.2. Pool ceiling 92.7%.
+**Two families, each half-right:** loose ones cover by carrying 4+ extra; tight ones land at TP+1
+with the right shape and miss a true page 6 times in 10. **Goal: superset ≥ 90% at taken ≈ 4.**
+
+**Next, and it is the only open direction:** the tight selectors do not fail at judging (71%
+precision vs the embedder's 23%) — they fail at **knowing they are not finished**. `set` already
+emits `missing`, the agent already has `coverage_map`, and neither self-checks before committing.
+Build a **completeness check before `select`**. Instruction does not work — measured (`triage_fill`
+moved 4.5 → 4.7). It needs a mechanism.
+
+---
+
+## ⚡ SESSION 13: the SELECTION layer — three things shipped, ZERO numbers yet (D-064)
+The thesis under test: **the agent choosing pages loses to the embedder's top-k** (probe 2c,
+MultiHop n=150 — triage keeps 69% AllGold, embedder top-10 keeps 75%). A reranker is not the answer;
+that was measured and refuted (D-048). Read DECISIONS **D-064** and, for the literature behind it,
+`.agent/private/RESEARCH_agentic_selection.md` (gitignored) + the artifact linked there.
+
+**Shipped this session — all default-OFF, all zero new LLM calls:**
+1. `triage_card=rich` (**Tier 0**) — several query-relevant passages instead of one, the passage
+   AND the matched catalog row (lean makes them mutually exclusive for no reason), section titles
+   whose *body* overlaps the query MARKED `▸`. Model-free (`query_passages`, `relevant_sections`).
+2. `triage_mode=set` (**Tier 2**) — one call over the same cards asking *"which pages TOGETHER cover
+   this?"*; each pick states what it ADDS; `missing` names the hole. Prompt `select_set.md`.
+   Sections still named (the refuted `read` selector lost by picking whole pages, D-053).
+3. `libkb probe-selection` — the deciding experiment. Arms `embedder | headers | rich | set |
+   set+rich | read` over ONE shared candidate pool. Headline metric **retention** (of the gold the
+   sieve already found, how much did the selector keep). Prices itself on 3 pools and stops
+   without `--yes`.
+
+`query_snippet` deliberately left BIT-IDENTICAL to the D-050-measured version; the improvement lives
+only in the new `query_passages`, so the baseline stays comparable. 25 new LLM-free tests.
+
+### ✅ MEASURED (D-068) — and the premise of this whole thread was CONFOUNDED
+`probe-selection --limit 150` on MultiHop, gemini-3.5-flash, one shared pool per query.
+
+The thread was built on probe 2c: *"triage keeps 69% AllGold, embedder top-10 keeps 75%"* — the
+agent loses to the sieve. **That comparison gave the embedder 10 pages and the selector ~4.**
+Retention rewards taking more. The first pass of this run repeated the error at basket 20.
+
+The control (free, 0 LLM) — embedder retention by basket: **53.6 / 59.7 / 63.7 / 77.7 / 89.0%** at
+3 / 4 / 5 / 10 / 20. At an **equal budget** the result inverts:
+
+| arm | pages | retention | AllGold |
+|---|---|---|---|
+| embedder | 4.0 | 59.7% | 21.3% |
+| **rich** | **4.1** | **88.1%** | **58.7%** |
+| headers (shipped) | 4.4 | 86.6% | 57.3% |
+| set | 3.6 | 82.6% | 50.0% |
+| trace | 3.4 | 79.7% | 42.7% |
+
+**`rich` = +28.4 retention over the embedder on the same pages, and within 0.9 points of what the
+embedder needs 20 pages for.** The agent is ~5× more page-efficient, not worse at picking.
+
+- **`triage_card=rich` is the best selector measured** — promote it after an answer-level A/B.
+- **`trace` (coverage map) REFUTED as a mode** — worst LLM arm, fewest pages. Telling the agent
+  which candidate covers which part appears to convince it that it is DONE (same shape as D-051).
+  The tool stays for the agent loop; the mode does not become a default.
+- **The real defect is UNDER-FILLING**: every arm may take 20 and takes 3–4, and retention tracks
+  pages-taken almost perfectly.
+
+### ✅ ANSWER-LEVEL A/B DONE (D-069) — `rich` NOT promoted, and the ceiling moved
+`eval-multihop --limit 100`, identical cases, **cache forced off**: ANSWER 70.5% → **71.6%**,
+honesty 100% both, coward 14.8% both, **+22% tokens**. +1.1 points is ONE flipped case — below the
+project's noise floor. **`triage_card` stays `lean`.**
+
+`rich` wins decisively on RETENTION (matches a 20-page embedder using 4.5 pages) and that does not
+reach the answer. So the honest claim for it is **efficiency, not accuracy** — valuable when the
+basket must be small, worth nothing at basket 20 on this corpus.
+
+**The ceiling has moved to the ANSWERER.** temporal 47.8% with the gold in the basket; comparison
+69.7%. Selection is no longer the binding constraint on this corpus — that is the finding.
+
+Also settled: the three ReAct fixes work mechanically (voluntary `select` 35%→98%, step-exhaustion
+147/150→0) but cost the agent its adaptive tool routing and still lose to one call. `triage_fill` is
+a null result — under-filling is real and not reachable by instruction; it needs code, not words.
+
+⚠️ **METRIC BUG 6.9, and it cost a paid run.** The semantic answer cache replayed arm A's answers to
+arm B; both arms came back bit-identical and the score was **inflated +6.8 points**.
+`evals/multihop_answer.run()` now forces the cache off itself, with a regression test. If you ever
+see two arms agree to the decimal, suspect the measurement before believing it.
+
+### (superseded) NEXT — the highest-value experiment in the project right now
+**Make the selector FILL its basket.** One prompt change + one arm (~$1.6). If ~5× page-efficiency
+survives at 10–20 pages, it beats embedder@20 outright and the thesis is not just rescued, it wins.
+Then: an answer-level A/B (`eval-multihop`) to confirm retention carries through to accuracy — it is
+a proxy, not the product. The `agent` (ReAct) arm is still unrun: 1,050 calls / 5.3M input tokens.
+
+### (superseded) NEXT — run the arms. Nothing here is a claim until then.
+```
+.venv\Scripts\libkb.exe probe-selection --limit 150            # preflight, spends nothing
+.venv\Scripts\libkb.exe probe-selection --limit 150 --yes --save benchmarks/selection.json
+# arms: embedder | headers | rich | set | set+rich | trace | trace+rich | agent | read
+# and the cheap-tier question, now that qwen tool-calling works:
+#   LIBKB_MODEL=qwen-plus .venv\Scripts\libkb.exe probe-selection --arms embedder,headers,agent --yes
+```
+Read `retention` first, then the by-kind table — `comparison`/`temporal` are the kinds that
+genuinely need >1 document and where a pointwise selector should fail. Then:
+- an arm that beats `embedder` on retention → flip its default and re-run `eval-multihop` to
+  confirm the answer follows the selection (retention is a proxy, not the product);
+- an arm that does not → say so in the SCORECARD and move to **Tier 3** (IRCoT loop + note
+  compression, gated by a CRAG-style evaluator), which is the next untried mechanism, not a retry.
+- FiQA selection (qrels, no gold answer needed) is the genuinely-new external datapoint — see
+  SCORECARD §5.5; needs a `load_fiqa` loader in `evals/selection.py` (the probe is dataset-agnostic
+  by design: a dataset is a loader returning `SelQuery` + a page→key map).
+
+### THE SCOPE RULE, and the first build under it (D-066 / D-067)
+**Every method from here is a TOOL/SKILL the agent uses on the 50–100 candidates the cascade already
+proposed — not a change to the sieve.** The sieve is not the bottleneck (FiQA R@100 0.920, MultiHop
+AllGold@20 93.5%); selection is (triage keeps 69%, embedder top-10 keeps 75%). Test before building
+*anything*: does this run over the whole corpus, or over the pool? Whole corpus ⇒ wrong frame.
+
+Shipped, all default-OFF, all measurable as `probe-selection` arms:
+- **`agent/pooltools.py`** (0 LLM) — `coverage_map` (question → parts → which candidate covers
+  which, + the parts nothing covers, + a greedy covering set) and `find_in_candidates` (literal/
+  regex across candidate bodies, returning the SECTION of each hit).
+- **`triage_mode=trace`** — `set` selection with the coverage map handed to it. Same call count.
+- **`triage_mode=agent`** — a ReAct loop (`agent/poolagent.py`): the librarian gets the tools plus
+  `ask_page` (one lite call, "does this page answer it? quote the line") and ends at `select`.
+  **Not the walk**: the candidate set is fixed before the loop starts, so nothing can get lost.
+  **Budgets in CODE** (`pool_max_steps` 6 / `pool_max_lite_calls` 3 / `pool_max_reads` 6); running
+  out closes out with one forced `select`, and selecting nothing falls back to the shipped triage.
+- **Tool calling now works on DashScope too** — the Gemini-only refusal is gone (it was an argument
+  about the walk, and it made the 6×-cheaper tier untestable here). **Verified live on qwen-plus,
+  4/4**: parseable args + call id, result round-trips into the answer, real pool-agent schemas
+  accepted. Bedrock/Ollama still raise. `tests/llm/test_tool_calling.py -m llm`.
+
+### Also this session: hybrid BM25 re-tried properly, and it is now closed (D-065)
+The user pushed back on D-032 — *one run does not mean it does not work; it may have been applied
+wrongly.* Correct challenge: both of D-032's query sets were adversarial to BM25 by construction
+(an LLM-generated tautology, and a CROSS-LINGUAL set where BM25 has no tokens to match). So it was
+re-run on FiQA — same language, human qrels, 57,638 docs, cached vectors, **0 generation calls**.
+
+**D-032 replicated** (fusion −0.18 nDCG@10) and **both rescue hypotheses failed**: stopword
+filtering +0.001, rare-term gating −0.004. Then the question fusion cannot answer: of 1,706 gold
+documents BM25 finds **10 (0.6%)** that dense misses at k=100 — so 0.6% is the ceiling on what a
+*perfect* trigger could add, which closes the agent-tool/escalation design too. Harness verified
+against two external numbers (dense 0.621 = §2.2; our BM25 0.235 vs BEIR's published 0.236).
+`libkb probe-lexical` · SCORECARD §2.5 · 25 LLM-free tests.
+**Scope kept honest:** this settles PROSE corpora with a strong embedder. An identifier-dense corpus
+(article numbers, SKUs, error strings) is a different population — re-open it then, in one free run.
+
+---
+
+### ⚠️ THE TEST-SUITE HANG IS DIAGNOSED — and it is NOT a code regression
+Both causes are environmental. Sessions 11 and 12 both lost time to this; do not re-derive it.
+1. **Orphan pytest processes.** A killed/timed-out run leaves `python.exe` alive holding file locks,
+   and one stale process silently stalls *every* later run — including a run of tests that pass in
+   1.8s on their own. **Before believing any hang:**
+   `Get-Process python*,timeout | Stop-Process -Force`, and also kill leftover `bash.exe` loops
+   (`Get-CimInstance Win32_Process -Filter "Name='bash.exe'"` → check `CommandLine` for `pytest`).
+2. **The venv is built on the Microsoft Store Python** (`WindowsApps\PythonSoftwareFoundation.Python
+   .3.12_...`), whose app-container filesystem makes the seed/store writes pathologically slow.
+   Rebuilding the venv on a python.org install is the real fix, and is the user's call.
+
+**Proved, not assumed:** with every change stashed (tree == HEAD), `test_orchestrator.py` and
+`test_store.py` hang identically. Small sets run fast — `test_selection` 25/25, `test_cascade` 9,
+`test_agent_roles` 6, `test_config` 4, `test_conventions` 2. Run the suite in small batches, one
+process each, and kill stragglers between batches.
+⚠️ **Never `git stash` to run a baseline check without popping in the SAME command** — a stash plus
+a timed-out shell once left this whole session's work sitting in `stash@{0}` with a clean tree.
+
+---
+
+## ⚡ SESSION 12: OLLAMA is the fourth provider (D-063) — open weights, generation only
+Goal: a cheaper generation tier. Built, unit-tested, **UNMEASURED** — no quality claim yet.
+Read `docs/OLLAMA.md` (setup + model shortlist + cost) and DECISIONS **D-063**.
+
+- `LIBKB_MODEL=ollama/gpt-oss:120b-cloud` is the whole configuration. The `ollama/` prefix is
+  **explicit on purpose**: Ollama serves `qwen3.5`/`gemma4`/`gemini-3-flash-preview`, so a bare-name
+  rule would route them to DashScope or Google.
+- LOCAL and CLOUD are one code path (`LIBKB_OLLAMA_HOST` + `OLLAMA_API_KEY`). Native `/api/chat`,
+  not the OpenAI shim, for **server-enforced JSON schema** (the D-040 fix) and `think` (off by
+  default — cloud models reason by default and that is billed GPU-time). **No new dependency.**
+- `retrieval_mode=walk` still refuses on Ollama (tool calling is Gemini-only, D-016/D-017/D-027).
+  The cascade — the default — is tool-free and runs on any model.
+- **The embedder deliberately did NOT move** (Ollama Cloud has no embedder; switching invalidates
+  every catalog row + every SCORECARD retrieval number). `_embed_ollama` exists so the head-to-head
+  is one `reindex --fresh` into a SEPARATE db.
+- Side-fix: `GET /api/models` labelled every non-Gemini model "dashscope" and gated availability on
+  the DashScope key (a Bedrock model already read as unavailable). Now `LLM.provider_of()`.
+
+### NEXT — the measurement that decides whether to adopt it
+**Honesty, not accuracy, is the gating number.** qwen labelled 26/28 improvised nulls "high"
+confidence (D-046) and cost 2.7 points of honesty where gemini held 99.3% (D-052).
+`eval-multihop --nulls --save` on the candidate model FIRST, then the answerable set.
+⚠️ Set `LIBKB_EVAL_CONCURRENCY` to your plan's concurrent-model limit (Free = 1, Pro = 3) — the
+default is 8 and will queue or 429.
+
+---
+
+## ⚡ SESSION 11: PRODUCT features · PUBLISHED public (D-062)
+Two arcs since the multi-agent work: product-level capabilities and a public release. **Product
+features (D-062) are committed** (`bb53628`). Unit suite ran **clean at 284 earlier this session**
+(a full re-run currently stalls on a Windows `os.replace` seed-write flake — environmental, not a
+regression; see watch-outs). Read SCORECARD **§3.2** and DECISIONS **D-062**.
+(A cost-accounting feature was also built this session and then REMOVED at the user's request — see
+"Removed / relocated" below.)
+
+1. **Product features (D-062, committed `bb53628`) — every one shaped to keep the answer call
+   single-shot (no O(T²)):**
+   - **Multi-turn chat** — `conversation/store.py` (transcripts, same gitignored db) +
+     `agent/contextualize.py` (a lite call rewrites a follow-up into a STANDALONE query BEFORE
+     retrieval; history never enters the cascade). Sidebar: title = first question,
+     editable/deletable, pin ≤5. `enable_context_rewrite` default-on, free with no history.
+   - **Semantic answer cache** (`cache/`) default-ON — a grounded, confident answer returns for a
+     paraphrase with **0 LLM calls**. Honesty rules: never cache NOT_FOUND / uncited / low-confidence;
+     precision-first threshold **0.92** (a cross-topic near-neighbour already sits at 0.875). Curatable
+     + global toggle in the Observatory; a hit is transparent ("from cache" + citations).
+   - **Synthesis route** (`agent/synthesizer.py`) for aggregative questions — wide scan → parallel
+     lite MAP → strong REDUCE, cited; empty = NOT_FOUND. **UNMEASURED on purpose** (SCORECARD §5.6).
+   - **Query decomposition — MEASURED & REFUTED** (SCORECARD §3.2). Unregistered by default; engine +
+     prompts + tests kept so it reproduces. Added `force_route` (measurement knob).
+   - **Observatory wired to REAL traffic** — KPIs + trajectories + trace replay from `GET
+     /api/observatory`. REMAINING: analyzer-driven misroute heatmap + fixes (labelled PREVIEW only).
+2. **PUBLISHED (committed through `e4c0194`).** Repo public at `github.com/LeDat98/toshokan_kb`,
+   **PolyForm Noncommercial 1.0.0** (source-available; MIT intended later), measured-numbers README
+   (NexusRAG-style). **The private-client, retail, ai-news, benchmark and eval data + the proposal
+   deck are gitignored and were verified ABSENT from the remote** (multi-layer audit; D-020). Do NOT
+   relax those ignores.
+### Removed / relocated this session (housekeeping, at the user's request)
+- **A cost-accounting feature built this session was fully REVERTED/DELETED** so no billing material
+  can reach the public repo; the incident that prompted it is recorded only in the gitignored
+  `.agent/private/COST_LEDGER.md`. ⚠️ The revert also removed an **eval-integrity fix** — so the
+  default-ON answer cache can again corrupt an eval *re-run* (it replays its own prior answers to the
+  judge, inflating the score). Real bug, zero billing content; re-apply as a standalone fix if wanted.
+- **The private client's `library/domains/<client>/` directory was MOVED out of the repo** to a
+  sibling folder outside the project (33 files, data intact; exact path given to the user), and the
+  `.gitignore` comment + path that named the client were removed. The repo no longer contains the
+  client name in any tracked file. (Unrelated, still local & gitignored: `docs/my_eval/` and the
+  catalog db carry client-derived data — never in the repo.)
+
+### NOT done / next session
+- **Private eval-set hygiene (local only):** the 1000-case set's `raw_predefined` type is **~16%
+  document fragments** (a line-wise split of hand-authored seed files turned body lines into
+  "questions"). It drags that type's score for all models equally (no rank change) but the absolute
+  number is wrong — filter or rewrite the 9 fragment cases before quoting per-type `raw_predefined`.
+  (Eval data is private/gitignored; do not describe its contents in tracked docs.)
+
+### Watch-outs specific to this session
+- `.agent/private/` is gitignored and holds `COST_LEDGER.md` (real billing figures + the Gemini
+  project id). It MUST stay untracked. The cost *implementation* was removed from the repo (above);
+  this private note is the only surviving record and can be deleted on request.
+- ⚠️ **`.gitignore` history:** an EARLIER commit's `.gitignore` named a client in a comment. That
+  comment and its path are removed from the working tree, and `main` was rewritten locally to drop
+  them — but **the rewrite has not been force-pushed**, so the old commits are still on the public
+  remote. Local `main` is therefore 4 ahead / 4 behind `origin/main`; a plain `git push` cannot
+  resolve it. Finishing this is `git push --force-with-lease origin main`, and it is the user's
+  call to run (a force-push is destructive and outward-facing).
+- The two dev servers from earlier sessions (backend :8000, vite :5173) are **stopped** (terminated,
+  no crash). Restart with `./dev.sh` if needed.
+- **Windows file-I/O flake in the unit suite (environmental, NOT a code bug).** `seed.apply` writes
+  page files via `store._write_page_file` → `os.replace(tmp, path)` (atomic rename); on Windows that
+  call intermittently STALLS at 0% CPU when Defender/the search-indexer holds a handle on the just-
+  written `.tmp` (faulthandler pinned it to `store.py:516`). It surfaced mid-session after heavy file
+  churn: `test_orchestrator_serves_a_cached_answer` and every seed-using test hang, though each passes
+  in isolation and the suite ran clean at 284 earlier the same session. If the suite hangs, it is this,
+  not a regression — run affected files singly, or add a repo/temp Defender exclusion. Worth a real fix
+  later (retry-on-`PermissionError` around the `os.replace`), but do not "fix" the tests.
+
+---
 
 ## ⚡ SESSION 10: the multi-agent architecture (D-061) — narration · roles · MCP/A2A seam · routing
-Read `docs/AGENT_ARCHITECTURE.md` (the plan of record) and DECISIONS **D-061**. Everything below is
-BUILT and tested (**203 tests, ruff clean on touched files**) but **NOT committed**; all default-safe.
+Read `docs/AGENT_ARCHITECTURE.md` (the plan of record) and DECISIONS **D-061**. Built + tested
+(**203 tests, ruff clean on touched files**); all default-safe. **COMMITTED** at `0da0915` (119 files)
+— the "NOT committed" note that was here is stale; the whole session shipped.
 
 1. **Design settled with the user, then built in phases.** Home-grown runtime, conform to the open
    protocols (MCP/A2A/AG-UI) as wire contracts — **no agent framework in deps** (Pydantic AI

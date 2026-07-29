@@ -47,6 +47,8 @@ logs/
 /docs/my_eval/
 # Client-facing proposal deck — kept local, never published (may reference client material)
 /docs/Toshokan_Proposal.pptx
+# Private local agent notes — user's business, kept out of the repo
+/.agent/private/
 
 # OS / IDE
 .DS_Store

@@ -34,9 +34,29 @@ class LibrarianAgent:
     ):
         """Pick the basket. Returns (basket, first-person thought). The triage-MODE branch (D-053)
         lives here now — the one place that decides which selector runs."""
-        # Lazy import to avoid a cycle (cascade imports the registry, which imports this role).
-        from libkb.agent.cascade import _triage, _triage_read
+        return selector_for(settings.triage_mode)(query, batch, store, llm, settings, max_pages)
 
-        if settings.triage_mode == "read":
-            return _triage_read(query, batch, store, llm, settings, max_pages)
-        return _triage(query, batch, store, llm, settings, max_pages)
+
+def selector_for(mode: str):
+    """The selector callable for a triage mode — the ONE table mapping a mode name to a mechanism.
+
+    Exposed (rather than inlined in `triage`) so the selection probe can run every arm against the
+    same cached candidates without round-tripping through Settings for each one; an arm the probe
+    reports and a mode production runs are then the same code by construction, not by agreement.
+    """
+    # Lazy import to avoid a cycle (cascade imports the registry, which imports this role).
+    from libkb.agent.cascade import (
+        _triage,
+        _triage_agent,
+        _triage_read,
+        _triage_set,
+        _triage_trace,
+    )
+
+    return {
+        "headers": _triage,
+        "read": _triage_read,
+        "set": _triage_set,
+        "trace": _triage_trace,
+        "agent": _triage_agent,
+    }.get(mode, _triage)

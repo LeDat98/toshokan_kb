@@ -493,3 +493,192 @@ Cost ≈ $3.5. Left for next session (evidence in hand, not yet acted on): make 
 configurable (default text), split the basket/confidence knobs, and — the real blocker for a 10k-page
 corpus — **concurrency** (ingest+eval are fully sequential; 2,079 pages took 40 min).
 Still the user's call: commit the 138 AI-News files? delete+re-ingest the mis-parsed PDF book?
+
+## 2026-07-16..19 — Sessions 9–10 (detail lives in STATE + DECISIONS, not re-narrated here)
+The diary skipped two sessions; their full record is in `.agent/STATE.md` (SESSION 9/10 blocks) and
+DECISIONS **D-045…D-061**. In one breath: **session 9** answered the scale question (retrieval is
+scale-invariant if you read WIDE — R@50/R@100 are near-flat 2k→10k while R@1/R@10 collapse), shipped
+retrieval-depth tiers (basket 10→20 was the real win, +7–9 on the multi-source kinds at held honesty),
+and REFUTED a cross-encoder reranker (a strong embedder leaves it nothing to add). **Session 10** built
+the multi-agent architecture (D-061): narration piggybacked on existing calls, typed agent roles +
+registry, an MCP/A2A seam, a calculator route, and front-door routing — all default-safe, committed at
+`0da0915`.
+
+## 2026-07-20..23 — Session 11: product features, a public release, and the cost bug the release exposed
+Three arcs.
+
+**Product (D-062, committed `bb53628`).** Four capabilities, each bent to the same rule the retrieval
+redesign set — keep the answer call single-shot, never let history or aggregation re-inflate it into an
+O(T²) walk. **Multi-turn** (a transcript store + a lite rewrite that turns "tell me more about it" into
+a standalone query BEFORE retrieval, so history touches only the cheap call). A **semantic answer
+cache** (a grounded, confident answer returns for a paraphrase with zero LLM calls; never caches a
+NOT_FOUND; threshold set precision-first at 0.92 because a cross-topic neighbour already sits at 0.875).
+A **synthesis route** for aggregative questions — shipped but **honestly flagged UNMEASURED**, because
+it has no held-out set yet. And **query decomposition**, built to attack a real measured cause and then
+**REFUTED by measurement** (it discards the joint signal a wide single-query basket keeps), so it is
+unregistered by default with its engine kept to reproduce the finding. The through-line, and the thing
+worth remembering: each was measured to decide keep-or-discard — two kept, one kept-but-unmeasured, one
+shelved — none applied because it was fashionable.
+
+**Published.** The repo went public at `github.com/LeDat98/toshokan_kb` under PolyForm Noncommercial
+1.0.0 (source-available; MIT later) with a measured-numbers README. The safety work was the point: a
+multi-layer audit confirmed the private-client, retail, ai-news, benchmark and eval data and the
+proposal deck are gitignored and absent from the remote.
+
+**A cost-accounting feature — built, then removed at the user's request.** A Gemini-dashboard scare
+led into the billing console and a real finding: the project measured accuracy with care and had been
+*estimating* cost. A cost-measurement feature was built to fix that — and building it caught a second
+bug: the new default-ON answer cache was serving evals their own prior answers, inflating scores on
+re-run. But the cost code kept accreting real billing figures, and the user's standing instruction is
+that billing stays out of the repo — so the **whole feature was reverted and deleted**, the incident
+recorded only in the gitignored `.agent/private/COST_LEDGER.md`. That revert also removed the
+eval-integrity fix, so that bug is live again — flagged for a standalone re-apply if wanted. (The
+stale session-8 "Cost ≈ $3.5" line above is left untouched, still the user's call.)
+
+**Housekeeping.** `library/domains/<client>/` was moved out of the repo to a sibling folder outside
+the project (data intact), and the `.gitignore` entry that named the client removed — the repo's
+tracked tree no longer carries the client name. (The name still exists in older git history on the
+remote; erasing that needs a history rewrite, the user's call.)
+
+The unit suite ran clean at 284 earlier the session; product features are committed (`bb53628` …
+`e4c0194`), the cost work is gone, nothing new is uncommitted beyond the pre-existing product tree.
+
+## 2026-07-28 — Ollama as the fourth provider (session 12)
+- User's goal: a **cheaper generation tier on open weights**, local or Ollama Cloud. Built it as a
+  fourth provider behind the existing single gateway (D-063) — `llm/client.py` is still the only
+  module that knows a provider exists, and routing is still by model name.
+- Three choices worth remembering:
+  1. **The prefix is explicit (`ollama/…`)** where the other providers route on a bare vendor
+     string. Ollama serves `qwen3.5`, `gemma4` and `gemini-3-flash-preview` under its own roof, so a
+     bare-name rule would hand them to DashScope or to Google. Found by reading Ollama's own model
+     list before writing the router, not by debugging a mis-billed call.
+  2. **Native `/api/chat`, not the OpenAI-compatible shim** — for `format: <json schema>` (enforced
+     by constrained decoding: the structural fix for D-040's silent 21% data loss) and `think`
+     (cloud models reason by default and we pay GPU-time for it). Bonus: httpx is already a
+     dependency, so this provider adds **nothing to install**, unlike openai/boto3.
+  3. **The embedder deliberately does NOT move.** Ollama Cloud has no embedding model at all, and
+     any Ollama embedder is a different coordinate system — switching it invalidates every catalog
+     row and every SCORECARD retrieval number. Implemented (`_embed_ollama` + a configurable
+     query-side instruction prefix, which is how open embedders express gemini's task-type
+     asymmetry) so the head-to-head is one `reindex --fresh` into a separate db, never a half switch.
+- Side-fix the fourth provider forced: `GET /api/models` called every non-Gemini model "dashscope"
+  and gated its availability on the DashScope key — a Bedrock model already showed as unavailable
+  when only AWS was configured. Now `LLM.provider_of()`, one place.
+- The cost picture is NOT per-token: Ollama Cloud bills GPU-time inside a flat plan (Free $0 /
+  Pro $20 / Max $100-paused) and publishes no cap numbers, so break-even can only be measured, not
+  computed. Against our measured $6.75/500 queries on `gemini-3.5-flash`, Pro pays for itself around
+  ~1,500 queries/month. **The limit that bites first is concurrency, not price:** eval/ingest default
+  to 8-wide and the Free plan allows 1 concurrent model.
+- The risk of a cheap model here is **honesty, not accuracy**, and we already measured it once: qwen
+  labelled 26/28 improvised nulls "high" confidence (D-046) and lost 2.7 points of honesty where
+  gemini held 99.3% (D-052). So the gating number for any open model is the **null-set** run.
+- `docs/OLLAMA.md` written (signup, env, model shortlist, cost, the honesty caveat, the embedder
+  experiment). 14 new tests, all LLM-free; nothing measured yet — no quality claim is made.
+
+## 2026-07-29 — Session 13: the SELECTION layer (D-064) — built, and deliberately unmeasured
+- **The question.** The step this project is named for is the one that loses: the LLM triage keeps
+  **69% AllGold** where simply taking the embedder's **top-10 keeps 75%** (probe 2c, MultiHop n=150).
+  A reranker is not the fix — measured and refuted (D-048).
+- **The reframe** (from the literature pass, notes in `.agent/private/RESEARCH_agentic_selection.md`):
+  "AI selection loses" is a verdict on the **weakest possible configuration**, and ours hits three of
+  its axes at once — *pointwise*, *binary*, *titles-only*. Fix an axis, not the ranker.
+- **Shipped, all default-OFF, all zero new LLM calls:**
+  - `triage_card=rich` (Tier 0) — `cascade.build_card`: several query-relevant passages instead of
+    one, passage AND the matched catalog row together (the lean card made them mutually exclusive
+    for no reason), and section titles whose *body* overlaps the query marked `▸`. New model-free
+    helpers `query_passages` / `relevant_sections`.
+  - `triage_mode=set` (Tier 2) — `cascade._triage_set` + `prompts/select_set.md`: the same one call,
+    asked for a covering SET; each pick states what it ADDS; `missing` names the hole. Section
+    naming kept (D-053's `read` selector lost partly by taking whole pages).
+  - `libkb probe-selection` (`evals/selection.py`) — the deciding experiment. Arms over ONE shared
+    candidate pool; headline metric **retention**; preflight prices the run on 3 real pools and
+    stops without `--yes`. Dataset-agnostic (a dataset is a loader).
+- **Discipline kept:** `query_snippet` left BIT-IDENTICAL to the version D-050's +1.7 was measured
+  on — the improvement lives only in the new `query_passages`, so the baseline arm really is the
+  shipped system. Tier 1 (setwise) skipped on cost grounds and said so.
+- SCORECARD reconciled with D-048: §2.2/§5/§8 still called the reranker "the highest-value
+  experiment, still not run" and FiQA "none yet". Both had been settled for a session and a half.
+- **NOTHING HERE IS A CLAIM.** No arm has been run. 25 new LLM-free tests pass; that is all.
+- **Test-suite hang, diagnosed at last (it is NOT a code regression).** Two causes, both
+  environmental: (1) killed pytest runs leave **orphan processes holding locks**, and a stale one
+  silently stalls every later run — `Get-Process python*` and kill before believing a hang; (2) the
+  venv is built on the **Microsoft Store Python** (`WindowsApps\PythonSoftwareFoundation...`), whose
+  app-container filesystem makes the seed/store writes pathologically slow. Proved by stashing every
+  change: at HEAD, `test_orchestrator.py` and `test_store.py` hang identically. Small file sets pass
+  fast (`test_selection` 25/25, `test_cascade` 9, `test_agent_roles` 6, `test_config` 4).
+
+## 2026-07-29 (cont.) — BM25 re-tried on the corpus that should have favoured it (D-065)
+- The user challenged D-032: *one run does not mean it does not work — it may have been applied
+  wrongly, and big tools still use lexical search.* Both halves were worth taking seriously.
+- **The challenge was right about the evidence.** D-032's two query sets were adversarial to BM25 by
+  construction: LLM-generated questions written FROM the pages being searched (metric bug 6.4), and
+  a CROSS-LINGUAL paraphrase set — Vietnamese questions, English pages, almost no shared tokens.
+- **It was wrong about the conclusion, and so was I.** Re-run on FiQA (57,638 docs, 648 human
+  questions, human qrels, cached vectors, 0 generation calls): fusion costs **-0.18 nDCG@10**. My
+  own config hypothesis — that ORing an unfiltered question was the real bug — moved it **+0.001**.
+  Gating fusion to rare query terms moved it **-0.004**.
+- **Then the question fusion cannot answer**, measured separately because the two come apart: of
+  1,706 gold documents BM25 finds **10 (0.6%)** the embedder misses at k=100, in 10 of 648 queries.
+  That is the CEILING on what a perfect trigger could add — so the agent-tool/escalation design (the
+  `grep` analogy) is closed here too, not just fusion.
+- On Claude Code: it does not do BM25 hybrid retrieval at all — it runs ripgrep as a TOOL. The
+  transferable lesson was "exact search as an escalation", and the 0.6% is what killed it *for this
+  kind of corpus*. Code is identifier-dense and has no embedding index; prose knowledge bases are
+  not that regime. Recorded as scope, not as a universal.
+- **Harness discipline:** the run reproduces two numbers it did not choose — dense nDCG@10 = 0.621
+  (= SCORECARD §2.2, three decimals) and our BM25 = 0.235 vs BEIR's published 0.236. After seven
+  metric bugs, a harness that cannot reproduce a known result may not be used to refute one.
+  `beir.score_rankings` was split out so every arm is scored by literally the same code.
+- Two incidental facts: `hybrid_lookup` was only reachable from the WALK's shortlist tool, so the
+  cascade never touched it; and a `text` row stores an EMPTY display text, so `questions_fts` would
+  have indexed empty strings. The queued "fix the FTS source" change was therefore **dropped** — it
+  would only have made a dead signal reachable.
+- Writing the tests corrected an assumption before the run did: in a toy corpus, stopword filtering
+  alone does NOT rescue the buried rare-term document — only the gate does. The test says so.
+
+## 2026-07-29 (cont.) — the scope rule, and the first build under it (D-066 / D-067)
+- **User set the frame and it was a correction worth taking:** every method from here is a TOOL the
+  agent uses on the 50–100 candidates the sieve already returned — not a change to the sieve. The
+  agent currently guesses from titles; the tools let it trace. Recorded as D-066 + a memory, because
+  it is the rule that says which experiments are even on-topic.
+- That immediately reclassified my own BM25 work: D-065 measured BM25 across all 57,638 FiQA
+  documents = sieve-level. Valid for "should BM25 retrieve" (no). Says nothing about BM25 as a tool
+  inside the pool — and its 0.6% complement figure cannot be borrowed, because that figure is about
+  documents never retrieved, whereas in-pool they are retrieved by definition.
+- Built: `pooltools.py` (`coverage_map`, `find_in_candidates` — both 0 LLM), `triage_mode=trace`
+  (set-selection handed the coverage map, same call count), `triage_mode=agent` (a ReAct loop with
+  `ask_page`, budgets in CODE, closing out with a forced `select` and falling back to shipped triage
+  if it still selects nothing).
+- **Removed the Gemini-only tool-calling refusal.** It was justified by D-027/D-017 — but those are
+  arguments about the WALK, where 9–13 turns compound a weak model's mistakes. The pool loop is
+  bounded by construction. Refusing by provider made the 6×-cheaper tier untestable, so the refusal
+  became a measurement. **Live on qwen-plus, 4/4**: tool call with parseable args + id, result
+  round-trips into the answer, real pool-agent schemas (incl. nested arrays) accepted.
+- Design notes worth keeping: `coverage_map` thresholds at HALF a part's content words per part
+  rather than summing across parts — summing is exactly how BM25 lets a crowd of common words bury
+  the one document that answers (D-065). And the pool is a FENCE: a model naming a page outside it
+  is told so, never silently given a best guess.
+- 28 new LLM-free tests. Nothing measured yet — `probe-selection` now has 9 arms and none has run.
+
+## 2026-07-29 (cont.) — the selection experiment ran, and it inverted the premise (D-068)
+- Stage A: 5 arms x 150 MultiHop queries, gemini-3.5-flash, one shared candidate pool. First read:
+  `embedder` 89.0% retention at basket 20, no LLM arm above it — probe 2c reproduced, thesis dead.
+- **Then the control that should have come first.** The LLM arms take 3.4-4.4 pages; the embedder
+  arm takes all 20. Retention rewards taking more. Free to check (0 LLM): embedder retention is
+  53.6 / 59.7 / 63.7 / 77.7 / 89.0% at basket 3 / 4 / 5 / 10 / 20.
+- **At an equal budget it inverts.** `rich` retains 88.1% on 4.1 pages vs the embedder's 59.7% on 4
+  — **+28.4 points** — and lands within 0.9 points of what the embedder needs FIVE TIMES the pages
+  to reach. The agent is not worse at picking; it is ~5x more page-efficient, and it had been scored
+  against an opponent with 5x the budget. Probe 2c's 69-vs-75 carried the same confound, and the
+  artifact / D-064 / the research notes were all written on top of it.
+- Recorded as metric bug 6.8: **retention reads like a quality metric and behaves like a budget
+  metric. Equalise what each arm may take before comparing selectors.** Eight metric bugs now; seven
+  of eight checks refuted us.
+- `rich` (Tier 0) is the best selector measured (+1.5 over shipped `headers` on fewer pages, +2.4 on
+  comparison). `trace` — the coverage map — is REFUTED as a mode: worst LLM arm at 79.7% and the
+  fewest pages taken. Handing the model a map of which candidate covers which part appears to
+  convince it that it is done. Same shape as the refuted coverage PROMPT (D-051): the tool computes
+  correctly, and telling the agent the answer makes it less thorough.
+- **The real defect is under-filling, not mis-picking** — allowed 20, takes 3-4, and retention
+  tracks pages-taken almost perfectly across arms. That is now the highest-value untried experiment
+  and it is one prompt change plus one arm.

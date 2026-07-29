@@ -346,3 +346,44 @@ def test_holdout_round_trips_through_disk(tmp_path):
 
     # both A/B arms must be scored on byte-identical questions, so the set is written once and read
     assert load_cases(path) == cases
+
+
+def test_the_eval_forces_the_answer_cache_off(monkeypatch):
+    """An eval measures the SYSTEM, not the cache — and this has destroyed two paid runs.
+
+    The semantic cache (D-062) serves a stored answer to anything within 0.92 cosine of a question
+    already answered. In production that is the feature. In an A/B it means arm B answers nothing,
+    replays arm A, and both arms come back **bit-identical on every metric** — which is exactly what
+    happened, and was caught only because identical numbers are implausible enough to re-examine.
+    So the eval overrides the setting itself; a knob the caller must remember is one that will be
+    forgotten."""
+    from libkb.config import get_settings
+    from libkb.evals import multihop_answer
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("LIBKB_ENABLE_ANSWER_CACHE", "true")  # on, as it ships
+    get_settings.cache_clear()
+    assert get_settings().enable_answer_cache is True
+
+    seen = {}
+
+    def _fake_answer(query, **kw):
+        seen["cache"] = kw["settings"].enable_answer_cache
+        raise RuntimeError("stop here — we only need the settings that were passed")
+
+    monkeypatch.setattr(multihop_answer, "answer_query_safe", _fake_answer)
+
+    class _LLM:
+        total_input_tokens = 0
+        total_output_tokens = 0
+
+    report = multihop_answer.run(
+        [multihop_answer.Case("q", "inference_query", "a")],
+        store=None,
+        catalog=type("C", (), {"count": lambda self: 0})(),
+        llm=_LLM(),
+        workers=1,
+    )
+    assert seen["cache"] is False, "the eval must force the cache OFF regardless of config"
+    assert report.errors == 1  # our sentinel exception, caught per-case as a transport failure
+    get_settings.cache_clear()

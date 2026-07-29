@@ -37,6 +37,7 @@ import structlog
 
 from libkb.agent.answerer import Answer, compose_not_found
 from libkb.agent.navigator import NavResult
+from libkb.agent.pooltools import coverage_map, render_coverage
 from libkb.agent.roles.registry import get_registry
 from libkb.agent.tools import NavEvent
 from libkb.catalog.search import lookup
@@ -44,7 +45,12 @@ from libkb.catalog.store import Catalog, Hit
 from libkb.config import Settings, get_settings
 from libkb.exceptions import NodeNotFound
 from libkb.library.models import PageContent, one_line_of
-from libkb.library.sections import pick_sections, query_snippet, section_index
+from libkb.library.sections import (
+    pick_sections,
+    query_passages,
+    relevant_sections,
+    section_index,
+)
 from libkb.library.store import LibraryStore
 from libkb.llm.client import LLM, get_llm
 
@@ -149,10 +155,13 @@ def answer_by_cascade(
         seen.update(h.page_id for h in batch)
         rounds = round_no
 
-        # ② TRIAGE — pick the basket. Two mechanisms (D-053): the shipped `headers` triage (strong
-        # model, section titles only) or the `read` selector (a cheap subagent that reads the top-N
-        # bodies). The diagnostic (backlog 2c) found header-triage drops 24 pts of gold, so `read`
-        # is under test as a cheaper-AND-better selector.
+        # ② TRIAGE — pick the basket. Three mechanisms, resolved by `triage_mode` in the librarian
+        # role: the shipped `headers` triage (strong model, one call over the candidate cards);
+        # `read` (a cheap subagent reads the top-N bodies — REFUTED, D-053); and `set` (D-064), the
+        # same one call asked for a covering SET rather than page-by-page relevance. What each of
+        # them SEES is the other dial, `triage_card` — see `build_card`. Both are measured by
+        # `libkb probe-selection`, because the diagnostic (backlog 2c) found this step keeps only
+        # 69% of the gold the sieve had already found.
         picked, triage_thought = librarian.triage(query, batch, store, llm, s, max_pages)
         for item in picked:
             emit(
@@ -304,12 +313,79 @@ def answer_by_cascade(
     return CascadeResult(answer=answer, nav=nav, basket=basket, rounds=rounds)
 
 
-def _triage(
-    query: str, batch: list[Hit], store: LibraryStore, llm: LLM, s: Settings, max_pages: int
-) -> tuple[list[BasketItem], str]:
-    """One LLM call over section headers. This is the ONLY place a page is chosen.
+def build_card(
+    query: str, hit: Hit, page: PageContent, one_line: str, path: str, s: Settings
+) -> str:
+    """The candidate card the selector actually judges — the ONE artefact that decides what the
+    librarian knows about a page before choosing it. Two shapes, one dial (`triage_card`):
 
-    Returns the basket AND the model's one-line first-person `thought` (D-061) shown in the UI."""
+    **lean** (shipped, MEASURED) — the matched catalog row *or* one query-relevant passage, the
+    spine label, and the bare section titles. ~59 tokens.
+
+    **rich** (Tier 0) — the same, plus: the passage is shown *even when* the catalog row matched
+    (they answer different questions — "what is this page for" vs "what does it say about YOUR
+    question"; the lean card makes them mutually exclusive for no reason), *several* passages
+    instead of one, and the section titles that actually overlap the query are MARKED.
+
+    Why this and not a reranker: the reranker was measured and refuted (D-048) — a strong embedder
+    leaves nothing to out-rank. This does not re-order anything. It attacks the other axis: the
+    selector was choosing on ~59 tokens of mostly-uninformative titles, which is the single weakest
+    selector configuration the reranking literature reports. Anthropic's Contextual Retrieval is the
+    same move at index time (context prepended before embedding, −35% retrieval failures); this is
+    its query-time, zero-LLM cousin. Cost is tokens on ONE call, and no generation at all.
+    """
+    rich = s.triage_card == "rich"
+    card = [f"### {path}"]
+    # The strongest signal we have, and it was going to waste: the catalog row that MATCHED.
+    # It says what this page is FOR, phrased the way a reader would ask — far more informative
+    # than a terse section title. Without it, triage was returning an empty basket on pages the
+    # sieve had ranked #1 (D-035).
+    if hit.text:
+        card.append(f'Answers questions like: "{hit.text}"')
+    # A TEXT index stores an empty display text, so the line above never fires and triage was left
+    # with only the spine label + section titles — the sieve's REASON for ranking this page
+    # discarded exactly where the librarian chooses. Show the passage(s) that most overlap the
+    # query: model-free, computed from the body we already fetched (D-050).
+    if rich or not hit.text:
+        passages = query_passages(
+            page.markdown,
+            query,
+            k=s.triage_passages if rich else 1,
+            max_chars=s.triage_snippet_chars,
+        )
+        for i, passage in enumerate(passages):
+            card.append(f'Relevant passage: "{passage}"' if i == 0 else f'  also: "{passage}"')
+    if one_line:
+        card.append(f"About: {one_line}")
+    titles = section_index(page.markdown)
+    if not titles:
+        card.append("Sections: (none — ask for the whole page)")
+        return "\n".join(card)
+    # Marking is the second half of the Tier-0 lever. `3.2 Analysis` is a title that says nothing,
+    # and the librarian is asked to copy one back EXACTLY; without a reason to prefer one it either
+    # guesses or asks for the whole page. The mark is computed from the section BODY, so it is a
+    # fact about the page, not a hint from the model.
+    marked = set(relevant_sections(page.markdown, query, k=3)) if rich else set()
+    card.append("Sections:" + (" (▸ = its text overlaps your question)" if marked else ""))
+    card += [f"  {'▸' if t in marked else '-'} {t}" for t in titles]
+    return "\n".join(card)
+
+
+def _fill_block(llm: LLM, s: Settings) -> str:
+    """The anti-under-fill instruction, or nothing (D-069).
+
+    MEASURED: every selector may take 20 pages and takes 3-4, and retention tracks pages-taken
+    almost perfectly across arms — so the defect is under-filling, not mis-picking. Kept behind a
+    dial rather than written into the prompt because the shipped prompt IS the measured baseline,
+    and a baseline that quietly changes is one you can no longer compare against."""
+    return ("\n" + llm.load_prompt("triage_fill")) if s.triage_fill else ""
+
+
+def _cards(
+    query: str, batch: list[Hit], store: LibraryStore, s: Settings
+) -> tuple[list[str], dict[str, str]]:
+    """Cards for a whole candidate batch + the path→page_id map used to resolve the model's picks.
+    Shared by every card-based selector so they are compared on IDENTICAL evidence."""
     cards: list[str] = []
     by_path: dict[str, str] = {}
     for hit in batch:
@@ -320,32 +396,18 @@ def _triage(
             continue  # a stale catalog row must not break a query
         path = store.path_str(hit.page_id)
         by_path[path] = hit.page_id
-        card = [f"### {path}"]
-        # The strongest signal we have, and it was going to waste: the catalog row that MATCHED.
-        # It says what this page is FOR, phrased the way a reader would ask — far more informative
-        # than a terse section title. Without it, triage was returning an empty basket on pages the
-        # sieve had ranked #1 (D-035).
-        if hit.text:
-            card.append(f'Answers questions like: "{hit.text}"')
-        else:
-            # A TEXT index stores an empty display text, so the line above never fires and triage
-            # was left with only the spine label + section titles — the sieve's REASON for ranking
-            # this page discarded exactly where the librarian chooses. Show the passage that most
-            # overlaps the query: model-free, computed from the body we already fetched (D-050).
-            passage = query_snippet(page.markdown, query, max_chars=s.triage_snippet_chars)
-            if passage:
-                card.append(f'Relevant passage: "{passage}"')
         spine = one_line_of(entry.one_line, s.max_one_line_chars) if entry.one_line else ""
-        if spine:
-            card.append(f"About: {spine}")
-        titles = section_index(page.markdown)
-        if titles:
-            card.append("Sections:")
-            card += [f"  - {t}" for t in titles]
-        else:
-            card.append("Sections: (none — ask for the whole page)")
-        cards.append("\n".join(card))
+        cards.append(build_card(query, hit, page, spine, path, s))
+    return cards, by_path
 
+
+def _triage(
+    query: str, batch: list[Hit], store: LibraryStore, llm: LLM, s: Settings, max_pages: int
+) -> tuple[list[BasketItem], str]:
+    """One LLM call over section headers. This is the ONLY place a page is chosen.
+
+    Returns the basket AND the model's one-line first-person `thought` (D-061) shown in the UI."""
+    cards, by_path = _cards(query, batch, store, s)
     if not cards:
         return [], ""
 
@@ -360,6 +422,7 @@ def _triage(
         candidates="\n\n".join(cards),
         max_pages=max_pages,
         coverage=coverage,
+        fill=_fill_block(llm, s),
     )
     data = llm.generate_json(prompt, schema=TRIAGE_SCHEMA)
 
@@ -383,6 +446,166 @@ def _triage(
             )
         )
     return out, str(data.get("thought") or "").strip()
+
+
+_SET_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "thought": {"type": "string"},
+        "selected": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "page": {"type": "string"},
+                    "sections": {"type": "array", "items": {"type": "string"}},
+                    "contributes": {"type": "string"},
+                },
+                "required": ["page"],
+            },
+        },
+        # What the question asks for that NO candidate covers. Not decoration: it is the honest
+        # signal the widen/last-resort path is for, and it is free on a call we already make.
+        "missing": {"type": "string"},
+    },
+    "required": ["selected"],
+}
+
+
+def _triage_set(
+    query: str, batch: list[Hit], store: LibraryStore, llm: LLM, s: Settings, max_pages: int
+) -> tuple[list[BasketItem], str]:
+    """SET-SELECTION: one call over the SAME cards as `_triage`, but a different QUESTION asked of
+    the model — *"which pages, TOGETHER, cover this question?"* rather than *"is this page
+    relevant?"*, asked of one page at a time.
+
+    Why this is the D-048-safe move. The refuted reranker tried to out-RANK a strong embedder and
+    had nothing to add. This does not rank. It optimises **coverage of a set**, which is the metric
+    a multi-source answer actually needs (AllGold, not R@1) and which no similarity function can
+    express: cosine cannot know that page B is worth taking *because* page A left a hole. That makes
+    it a different objective, not a better scorer — so D-048's mechanism ("a strong first stage
+    leaves a reranker nothing to add") simply does not reach it.
+
+    It also removes, in one change, the two axes that put the current triage at the weakest
+    configuration in the selection literature: it is COMPARATIVE (candidates are judged against each
+    other, not in isolation) and it is not a binary take/leave (each pick must state what it
+    contributes that the others do not). `missing` is the third thing it buys — an explicit "nothing
+    here covers X", which is exactly the signal the widen round needs and currently has to infer.
+
+    Section naming is KEPT (unlike the refuted `read` selector, D-053, which picked whole pages and
+    short-circuited the last-resort net the accuracy actually rides on).
+    """
+    cards, by_path = _cards(query, batch, store, s)
+    if not cards:
+        return [], ""
+
+    prompt = llm.load_prompt(
+        "select_set",
+        query=query,
+        candidates="\n\n".join(cards),
+        max_pages=max_pages,
+        tools="",
+        fill=_fill_block(llm, s),
+    )
+    data = llm.generate_json(prompt, schema=_SET_SCHEMA)
+    return _resolve_set(data, by_path, store, max_pages)
+
+
+def _resolve_set(
+    data: dict, by_path: dict[str, str], store: LibraryStore, max_pages: int
+) -> tuple[list[BasketItem], str]:
+    """A set-selection reply → the basket. Shared by every set-shaped selector so the arms differ
+    by what they were TOLD, never by how their answer was parsed."""
+    out: list[BasketItem] = []
+    seen: set[str] = set()
+    for row in (data.get("selected") or [])[:max_pages]:
+        path = str(row.get("page", "")).strip()
+        page_id = by_path.get(path) or _fuzzy_path(path, by_path)
+        if page_id is None or page_id in seen:
+            continue
+        seen.add(page_id)
+        out.append(
+            BasketItem(
+                page_id=page_id,
+                path=store.path_str(page_id),
+                sections=[str(x) for x in (row.get("sections") or [])],
+                why=str(row.get("contributes", "")).strip(),
+            )
+        )
+    thought = str(data.get("thought") or "").strip()
+    missing = str(data.get("missing") or "").strip()
+    if missing:
+        thought = f"{thought} (still missing: {missing})".strip()
+    return out, thought
+
+
+def _triage_trace(
+    query: str, batch: list[Hit], store: LibraryStore, llm: LLM, s: Settings, max_pages: int
+) -> tuple[list[BasketItem], str]:
+    """SET-SELECTION, with a TOOL RESULT in hand (D-066): before choosing, the coverage map is
+    computed over the pool and handed to the model.
+
+    The difference from `_triage_set` is one block of text and zero extra calls. That block is not
+    another model's opinion — it is arithmetic over the page bodies: *the question has these three
+    parts; page A covers 1 and 3; page B covers 2; nothing covers part 4.* The selector stops having
+    to infer coverage from titles and starts being told it.
+
+    This is the shape every method takes from here (D-066): a tool that answers, over the 50–100
+    candidates the sieve already proposed, a question the agent would otherwise guess at.
+    """
+    cards, by_path = _cards(query, batch, store, s)
+    if not cards:
+        return [], ""
+
+    pages: list[tuple[str, str, str]] = []
+    for path, page_id in by_path.items():
+        try:
+            pages.append((page_id, path, store.page(page_id).markdown))
+        except NodeNotFound:
+            continue
+    coverage = coverage_map(query, pages)
+
+    prompt = llm.load_prompt(
+        "select_set",
+        query=query,
+        candidates="\n\n".join(cards),
+        max_pages=max_pages,
+        tools=render_coverage(coverage),
+        fill=_fill_block(llm, s),
+    )
+    data = llm.generate_json(prompt, schema=_SET_SCHEMA)
+    return _resolve_set(data, by_path, store, max_pages)
+
+
+def _triage_agent(
+    query: str, batch: list[Hit], store: LibraryStore, llm: LLM, s: Settings, max_pages: int
+) -> tuple[list[BasketItem], str]:
+    """The pool agent (D-067): the librarian is given TOOLS over the candidates and decides for
+    itself what to check before committing. See `agent/poolagent.py` for the loop and its budgets.
+
+    **Falls back to the shipped triage when the loop selects nothing.** An agent that spends its
+    budget and learns nothing must not also cost the reader the answer — that is the D-035 failure
+    (an empty basket on pages the sieve had ranked #1) with extra steps.
+    """
+    from libkb.agent.poolagent import PoolAgent
+
+    result = PoolAgent(query, batch, store, llm, s, max_pages).run()
+    if not result.selected:
+        log.info("pool_agent_empty_falling_back", exhausted=result.budget.exhausted or None)
+        return _triage(query, batch, store, llm, s, max_pages)
+
+    thought = result.thought
+    if result.missing:
+        thought = f"{thought} (still missing: {result.missing})".strip()
+    return [
+        BasketItem(
+            page_id=sel.page_id,
+            path=store.path_str(sel.page_id),
+            sections=sel.sections,
+            why=sel.why,
+        )
+        for sel in result.selected
+    ], thought
 
 
 _SELECT_SCHEMA = {

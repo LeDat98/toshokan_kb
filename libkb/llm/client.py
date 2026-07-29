@@ -3,18 +3,24 @@
 Convention (enforced by tests/test_conventions.py): no other module in `libkb` may import
 `google.genai`. All calls log model, tokens and latency.
 
-TWO providers now: Gemini, and Alibaba DashScope (Qwen) through its OpenAI-compatible endpoint.
-Routing is by MODEL NAME (`settings.dashscope_prefixes`), so `LIBKB_MODEL_LITE=qwen-flash` is the
-entire configuration — there is no second set of role flags to drift out of sync.
+FOUR providers now: Gemini, Alibaba DashScope (Qwen) through its OpenAI-compatible endpoint, AWS
+Bedrock (Anthropic), and Ollama (open-weight models, local or Ollama Cloud — one code path, because
+the two differ only by host and bearer token). Routing is by MODEL NAME (`settings.*_prefixes`), so
+`LIBKB_MODEL_LITE=qwen-flash` or `LIBKB_MODEL=ollama/gpt-oss:120b-cloud` is the entire
+configuration — there is no second set of role flags to drift out of sync.
 
 Deliberately NOT symmetric, and the asymmetry is the point:
 
-  * generate_json + embed  → either provider. This is the bulk, cost-dominated work (the question
+  * generate_json + embed  → every provider. This is the bulk, cost-dominated work (the question
     flywheel at ingest), and it is exactly what a free quota should be spent on.
-  * TOOL CALLING           → **Gemini only**, and DashScope raises rather than degrade silently.
-    Navigation is the one job we MEASURED a cheap model failing at (D-027: page 54% vs 86%), and
-    Gemini's thought-signature protocol (D-017) has no equivalent here. A tool loop that half-works
-    is worse than one that refuses.
+  * TOOL CALLING           → Gemini **and** DashScope (D-067); Bedrock and Ollama still raise.
+    It was Gemini-only for a real reason: navigation is the one job we MEASURED a cheap model
+    failing at (D-027: page 54% vs 86%), and Gemini's thought-signature protocol (D-017) has no
+    equivalent elsewhere. But that argument is about the WALK — 9–13 turns, where a weak model's
+    mistakes compound and are unrecoverable. The pool tools (D-066) are a handful of bounded calls
+    over candidates the sieve already found, and refusing by provider made the 6×-cheaper tier
+    untestable there. So the refusal is now a MEASUREMENT, not a rule. DashScope correlates results
+    to calls by `tool_call_id`; that plumbing lives in `_dashscope_messages`.
 """
 
 from __future__ import annotations
@@ -45,6 +51,9 @@ PROMPTS_DIR = Path(__file__).parent / "prompts"
 _RETRYABLE_CODES = {429, 500, 502, 503, 504}
 _EMBED_BATCH = 100
 _DASHSCOPE_EMBED_BATCH = 10  # DashScope's per-request cap, not a tuning choice
+# Ollama imposes no batch cap; this one bounds how much a single local model has to hold at once
+# (and how much work one retry throws away), it is not a protocol limit.
+_OLLAMA_EMBED_BATCH = 64
 
 
 def _strip_code_fence(text: str) -> str:
@@ -56,19 +65,90 @@ def _strip_code_fence(text: str) -> str:
     return re.sub(r"\n?```\s*$", "", t).strip()
 
 
+def _dashscope_messages(turn: Turn) -> list[dict[str, Any]]:
+    """One neutral `Turn` → one OpenAI-shaped message (D-067).
+
+    Three shapes, and the ORDER they must appear in is the protocol: an assistant message carrying
+    `tool_calls`, then one `role="tool"` message per call echoing its `tool_call_id`. Omit the id
+    and DashScope 400s the *next* request, not this one — which reads as a random failure several
+    turns later. `call_id` is the neutral `ToolCall`'s own field, so the round-trip is closed here
+    rather than left to each caller."""
+    if turn.tool_calls:
+        return [
+            {
+                "role": "assistant",
+                "content": turn.text or "",
+                "tool_calls": [
+                    {
+                        "id": call.call_id or call.name,
+                        "type": "function",
+                        "function": {"name": call.name, "arguments": json.dumps(call.args or {})},
+                    }
+                    for call in turn.tool_calls
+                ],
+            }
+        ]
+    if turn.tool_responses:
+        # OpenAI wants ONE message per tool result, so a Turn batching several fans out here.
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": r.call_id or r.name,
+                "content": json.dumps(r.response, ensure_ascii=False),
+            }
+            for r in turn.tool_responses
+        ]
+    return [{"role": "assistant" if turn.role == "model" else "user", "content": turn.text or ""}]
+
+
+def _dashscope_tool_calls(message: Any) -> list[ToolCall]:
+    """The provider's tool calls → the neutral `ToolCall`. Arguments arrive as a JSON *string*; a
+    model that emits malformed JSON must cost one call, not crash the loop, so a bad payload
+    degrades to empty args and the tool layer rejects it with a message the model can act on."""
+    out: list[ToolCall] = []
+    for raw in getattr(message, "tool_calls", None) or []:
+        fn = getattr(raw, "function", None)
+        if fn is None:
+            continue
+        try:
+            args = json.loads(fn.arguments or "{}")
+        except (TypeError, ValueError):
+            args = {}
+        out.append(
+            ToolCall(name=fn.name, args=args if isinstance(args, dict) else {}, call_id=raw.id)
+        )
+    return out
+
+
 def _is_retryable(exc: Exception) -> bool:
     """The OpenAI SDK's exception tree is not importable from here (it is an optional dep), so the
     status code is read off the exception rather than matched by type."""
     code = getattr(exc, "status_code", None) or getattr(exc, "code", None)
     if code is None:
-        # botocore's ClientError carries the HTTP status inside .response, not as an attribute
         resp = getattr(exc, "response", None)
         if isinstance(resp, dict):
+            # botocore's ClientError carries the HTTP status inside .response, not as an attribute
             code = resp.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        else:
+            # httpx.HTTPStatusError (the Ollama path) carries a Response object there instead
+            code = getattr(resp, "status_code", None)
     try:
         return int(code) in _RETRYABLE_CODES
     except (TypeError, ValueError):
         return False
+
+
+def _ollama_think(value: str) -> bool | str | None:
+    """Map the `LIBKB_OLLAMA_THINK` string onto what `/api/chat` expects. Empty ⇒ None ⇒ the field
+    is not sent at all, which leaves the model's own default in place."""
+    v = (value or "").strip().lower()
+    if not v:
+        return None
+    if v in {"false", "0", "no", "off"}:
+        return False
+    if v in {"true", "1", "yes", "on"}:
+        return True
+    return v  # "low" | "medium" | "high" | "max"
 
 
 @dataclass
@@ -78,6 +158,10 @@ class ToolCall:
     # Opaque Gemini "thought signature" (bytes) that MUST be echoed back with the
     # function-call turn or the API rejects the next request (400). Not a genai type.
     thought_signature: Any = None
+    # OpenAI-shaped providers (DashScope, D-067) correlate a result to its call by id, and reject
+    # the NEXT request if it is missing — a failure that surfaces turns later. Gemini has no
+    # counterpart and leaves it None, so the field is additive, not a second protocol.
+    call_id: str | None = None
 
 
 @dataclass
@@ -93,6 +177,7 @@ class ToolSpec:
 class ToolResponse:
     name: str
     response: dict[str, Any]
+    call_id: str | None = None  # echoed back to OpenAI-shaped providers; see ToolCall.call_id
 
 
 @dataclass
@@ -127,6 +212,7 @@ class LLM:
         self._client = genai.Client(api_key=api_key or settings.gemini_api_key)
         self._dashscope: Any = None  # built lazily: the SDK is optional and the key may be absent
         self._bedrock: Any = None  # built lazily: boto3 is optional, reads ~/.aws itself
+        self._ollama: Any = None  # built lazily: an httpx.Client, so connections are pooled
         self.default_model: str | None = None  # None ⇒ settings.model
         # Monotonic counters, not a log — the eval diffs them around each case to price a query
         # (ROUTING_REDESIGN §3.0). Ints, so a long-lived API process cannot grow a list forever.
@@ -199,11 +285,31 @@ class LLM:
             )
         return self._bedrock
 
+    def _is_ollama(self, model: str) -> bool:
+        return model.startswith(self._settings.ollama_prefix)
+
+    def _ollama_model(self, model: str) -> str:
+        """`ollama/gpt-oss:120b-cloud` → `gpt-oss:120b-cloud`. The prefix is OUR routing token, not
+        part of the model's name, and Ollama would 404 on it."""
+        return model[len(self._settings.ollama_prefix) :]
+
+    def provider_of(self, model: str | None = None) -> str:
+        """Which provider a model id routes to. One place, so the API's picker cannot drift out of
+        sync with what `generate` actually does (it used to label every non-Gemini model
+        'dashscope' and gate its availability on the DashScope key)."""
+        m = model or self.default_model or self._settings.model
+        if self._is_ollama(m):
+            return "ollama"
+        if self._is_dashscope(m):
+            return "dashscope"
+        if self._is_bedrock(m):
+            return "bedrock"
+        return "gemini"
+
     def supports_tools(self, model: str | None = None) -> bool:
         """Tool calling is Gemini-only (see the module docstring). The UI needs to know BEFORE the
         user picks, not after the walk dies halfway through."""
-        m = model or self.default_model or self._settings.model
-        return not (self._is_dashscope(m) or self._is_bedrock(m))
+        return self.provider_of(model) == "gemini"
 
     def _dashscope_client(self) -> Any:
         """OpenAI-compatible client for DashScope. Imported lazily so `openai` stays optional."""
@@ -226,6 +332,35 @@ class LLM:
                 max_retries=0,  # we own the retry loop (_with_retry); the SDK must not double it
             )
         return self._dashscope
+
+    def _ollama_client(self) -> Any:
+        """One pooled `httpx.Client` for Ollama. No SDK: Ollama's native API is a handful of JSON
+        POSTs, and httpx is already a hard dependency — so unlike DashScope (openai) and Bedrock
+        (boto3) this provider adds nothing to install.
+
+        LOCAL and CLOUD are the same client. `LIBKB_OLLAMA_HOST=https://ollama.com` +
+        `OLLAMA_API_KEY` points it at Ollama Cloud; the default points it at the local daemon,
+        which ignores the (absent) bearer token. There is no second code path to keep in sync.
+        """
+        if self._ollama is None:
+            host = self._settings.ollama_host.rstrip("/")
+            headers = {"Content-Type": "application/json"}
+            if self._settings.ollama_api_key:
+                headers["Authorization"] = f"Bearer {self._settings.ollama_api_key}"
+            self._ollama = httpx.Client(
+                base_url=host,
+                headers=headers,
+                # A cold local model LOADS before it answers and a big cloud model thinks for a
+                # while, so the read budget is generous — but a connect timeout stays short: a
+                # daemon that is not running should fail in seconds, not in three minutes.
+                timeout=httpx.Timeout(self._settings.ollama_timeout, connect=10.0),
+            )
+        return self._ollama
+
+    def _ollama_post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        response = self._ollama_client().post(path, json=payload)
+        response.raise_for_status()
+        return response.json()
 
     def generate(
         self,
@@ -251,6 +386,16 @@ class LLM:
             )
         if self._is_bedrock(model):
             return self._generate_bedrock(
+                contents,
+                model=model,
+                system=system,
+                tools=tools,
+                json_schema=json_schema,
+                temperature=temperature,
+                max_retries=max_retries,
+            )
+        if self._is_ollama(model):
+            return self._generate_ollama(
                 contents,
                 model=model,
                 system=system,
@@ -369,14 +514,14 @@ class LLM:
         temperature: float,
         max_retries: int,
     ) -> LLMResult:
-        if tools:
-            # Refuse loudly. Navigation is the ONE job we measured a cheaper model failing at
-            # (D-027), and Gemini's thought-signature echo (D-017) has no counterpart here. Falling
-            # back "helpfully" would silently move the hardest work onto the weakest model.
-            raise LLMError(
-                f"tool calling is Gemini-only; {model} is a DashScope model. "
-                "Keep LIBKB_MODEL on Gemini and send only the bulk tier (LIBKB_MODEL_LITE) to Qwen."
-            )
+        # TOOL CALLING (D-067). This used to refuse outright, on the grounds that navigation is the
+        # one job a cheaper model measurably failed at (D-027) and that Gemini's thought-signature
+        # echo (D-017) has no counterpart here. Both facts still hold — but they are an argument
+        # about the WALK, whose 9–13 turns compound a weak model's mistakes. The pool tools (D-066)
+        # are a different shape: a handful of bounded calls over 50–100 candidates the sieve already
+        # found, where a wrong tool call costs one cheap call and is visible in the trace. Refusing
+        # by provider made that untestable on the tier that is 6× cheaper, so the refusal is gone
+        # and the question is handed back to measurement, where it belongs.
         client = self._dashscope_client()
         messages: list[dict[str, Any]] = []
         if system:
@@ -385,12 +530,21 @@ class LLM:
             messages.append({"role": "user", "content": contents})
         else:
             for turn in contents:
-                if turn.tool_calls or turn.tool_responses:
-                    raise LLMError("DashScope path carries no tool turns")
-                role = "assistant" if turn.role == "model" else "user"
-                messages.append({"role": role, "content": turn.text or ""})
+                messages.extend(_dashscope_messages(turn))
 
         kwargs: dict[str, Any] = {"model": model, "messages": messages, "temperature": temperature}
+        if tools:
+            kwargs["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": spec.name,
+                        "description": spec.description,
+                        "parameters": spec.parameters,
+                    },
+                }
+                for spec in tools
+            ]
         if json_schema is not None:
             # Qwen honours `json_object` but does NOT enforce a schema server-side the way Gemini
             # does, so the schema has to travel in the prompt — and `generate_json`'s repair retry
@@ -437,15 +591,21 @@ class LLM:
                 latency_ms=int((time.monotonic() - start) * 1000),
             )
             self._record_usage(usage)
+            message = response.choices[0].message
+            calls = _dashscope_tool_calls(message)
             log.info(
                 "llm_call",
                 model=model,
                 input_tokens=usage.input_tokens,
                 output_tokens=usage.output_tokens,
                 latency_ms=usage.latency_ms,
-                tool_calls=0,
+                tool_calls=len(calls),
             )
-            return LLMResult(text=response.choices[0].message.content, usage=usage)
+            # Mirror the Gemini path: a turn that called a tool carries no text. Qwen sometimes
+            # returns an empty string alongside its calls, and a caller that trusted `text` would
+            # treat "" as an answer and stop the loop.
+            text = None if calls else message.content
+            return LLMResult(text=text, tool_calls=calls, usage=usage)
         raise LLMError("DashScope call failed after retries") from last_exc
 
     def _generate_bedrock(
@@ -536,6 +696,130 @@ class LLM:
             return LLMResult(text=text, usage=usage)
         raise LLMError("Bedrock call failed after retries") from last_exc
 
+    def _generate_ollama(
+        self,
+        contents: str | list[Turn],
+        *,
+        model: str,
+        system: str | None,
+        tools: list[ToolSpec] | None,
+        json_schema: Any | None,
+        temperature: float,
+        max_retries: int,
+    ) -> LLMResult:
+        """Open-weight models through Ollama — the same code for a local daemon and for the cloud.
+
+        Two things here are BETTER than the other non-Gemini providers, and both are structural
+        rather than a matter of model quality:
+
+          * **The JSON schema is enforced server-side.** `format: <schema>` constrains decoding, so
+            the reply cannot be the malformed shape that cost us 21% of a corpus on DashScope
+            (D-040). `generate_json` still validates and re-asks — a model can satisfy a schema and
+            still say nothing useful — but the failure mode it guards against becomes rare here.
+          * **Thinking is a knob we hold.** Most Ollama cloud models reason by default; on a triage
+            or question-generation call that is pure cost. Off by default (`LIBKB_OLLAMA_THINK`).
+
+        Tool calling is refused, as for DashScope and Bedrock — even though Ollama models DO
+        advertise tools. The walk echoes Gemini thought-signatures (D-017), which have no
+        counterpart here, and navigation is the one job a cheap model MEASURABLY fails (D-027).
+        The cascade — the default retrieval path — is tool-free, so any Ollama model can run it.
+        """
+        if tools:
+            raise LLMError(
+                f"tool calling is Gemini-only; {model} is an Ollama model. "
+                "Keep LIBKB_MODEL on Gemini for the tree-walk; the cascade (the default) is "
+                "tool-free and runs on any provider."
+            )
+        name = self._ollama_model(model)
+        messages: list[dict[str, Any]] = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        if isinstance(contents, str):
+            messages.append({"role": "user", "content": contents})
+        else:
+            for turn in contents:
+                if turn.tool_calls or turn.tool_responses:
+                    raise LLMError("Ollama path carries no tool turns")
+                role = "assistant" if turn.role == "model" else "user"
+                messages.append({"role": role, "content": turn.text or ""})
+
+        payload: dict[str, Any] = {
+            "model": name,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": temperature},
+        }
+        if json_schema is not None:
+            payload["format"] = json_schema
+        think = _ollama_think(self._settings.ollama_think)
+        if think is not None:
+            payload["think"] = think
+
+        delay = 1.0
+        last_exc: Exception | None = None
+        for attempt in range(max_retries + 1):
+            start = time.monotonic()
+            try:
+                data = self._ollama_post("/api/chat", payload)
+            except httpx.HTTPStatusError as exc:
+                # A model with no reasoning mode rejects `think` outright (400). That is a property
+                # of the MODEL, not of the request we meant to make, so drop the field and go on
+                # rather than making every non-thinking model unusable through this path.
+                last_exc = exc
+                if "think" in payload and exc.response.status_code == 400:
+                    body = exc.response.text.lower()
+                    if "think" in body or "thinking" in body:
+                        log.info("ollama_think_unsupported", model=name)
+                        payload.pop("think")
+                        continue
+                if attempt < max_retries and _is_retryable(exc):
+                    log.warning("llm_retry", model=name, attempt=attempt + 1, delay_s=delay)
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise LLMError(f"Ollama call failed ({exc.response.status_code}): {exc}") from exc
+            except httpx.HTTPError as exc:  # transport: daemon down, socket dropped, timeout
+                last_exc = exc
+                if attempt < max_retries:
+                    log.warning("llm_retry", model=name, attempt=attempt + 1, delay_s=delay)
+                    time.sleep(delay)
+                    delay *= 2
+                    continue
+                raise LLMError(f"Ollama call failed: {exc}") from exc
+
+            message = data.get("message") or {}
+            text = message.get("content") or ""
+            # FAIL CLOSED. An empty content is not an answer, and the two ways to get one here are
+            # both silent: a model that spent its whole budget inside `thinking`, and a refusal that
+            # Ollama reports as a normal 200. Either way the caller must see a failure, not "".
+            if not text.strip():
+                raise LLMError(
+                    f"{name} returned an empty message (done_reason="
+                    f"{data.get('done_reason')!r}). If it is a thinking model, its reasoning may "
+                    "have consumed the whole budget — raise num_predict or set LIBKB_OLLAMA_THINK."
+                )
+            if json_schema is not None:
+                # Constrained decoding should make this a no-op; a small model asked for JSON in
+                # the prompt (rather than by schema) still sometimes fences it.
+                text = _strip_code_fence(text)
+            usage = Usage(
+                model=model,
+                input_tokens=int(data.get("prompt_eval_count") or 0),
+                output_tokens=int(data.get("eval_count") or 0),
+                latency_ms=int((time.monotonic() - start) * 1000),
+            )
+            self._record_usage(usage)
+            log.info(
+                "llm_call",
+                model=model,
+                input_tokens=usage.input_tokens,
+                output_tokens=usage.output_tokens,
+                latency_ms=usage.latency_ms,
+                tool_calls=0,
+            )
+            return LLMResult(text=text, usage=usage)
+        raise LLMError("Ollama call failed after retries") from last_exc
+
     def embed(
         self, texts: list[str], *, task: str = "RETRIEVAL_DOCUMENT", model: str | None = None
     ) -> np.ndarray:
@@ -554,11 +838,12 @@ class LLM:
         # placeholder vector — which matches nothing — is the correct, alignment-preserving fix.
         texts = [t if t and t.strip() else "(empty)" for t in texts]
         start = time.monotonic()
-        vectors = (
-            self._embed_dashscope(texts, model)
-            if self._is_dashscope(model)
-            else self._embed_gemini(texts, model, task)
-        )
+        if self._is_dashscope(model):
+            vectors = self._embed_dashscope(texts, model)
+        elif self._is_ollama(model):
+            vectors = self._embed_ollama(texts, model, task)
+        else:
+            vectors = self._embed_gemini(texts, model, task)
         log.info(
             "llm_embed",
             model=model,
@@ -620,6 +905,36 @@ class LLM:
                 "DashScope embed",
             )
             vectors.extend(item.embedding for item in response.data)
+        return vectors
+
+    def _embed_ollama(self, texts: list[str], model: str, task: str) -> list[list[float]]:
+        """Embeddings on an open-weight model. NOTE this is a LOCAL capability: Ollama Cloud hosts
+        chat models only, so `LIBKB_EMBED_MODEL=ollama/…` needs a daemon on this machine (which is
+        fine — an embedder is 0.3–0.6B and runs on CPU).
+
+        Ollama has no `task_type`, so gemini's document/query asymmetry is expressed the way open
+        embedders express it: an instruction prefix on the QUERY side only. The wording differs per
+        model, so it is configuration (`ollama_embed_query_prefix`), not a guess made here. Left
+        empty the embedding is symmetric — correct for bge-m3, a small quality loss for the models
+        that were trained with a prefix.
+        """
+        name = self._ollama_model(model)
+        prefix = self._settings.ollama_embed_query_prefix if "QUERY" in (task or "").upper() else ""
+        vectors: list[list[float]] = []
+        for i in range(0, len(texts), _OLLAMA_EMBED_BATCH):
+            batch = [prefix + t for t in texts[i : i + _OLLAMA_EMBED_BATCH]]
+            data = self._with_retry(
+                lambda b=batch: self._ollama_post("/api/embed", {"model": name, "input": b}),
+                "Ollama embed",
+            )
+            got = data.get("embeddings") or []
+            if len(got) != len(batch):
+                # An alignment break is silent and poisonous: row i would carry row j's vector and
+                # every cosine after it is meaningless. Fail loudly instead.
+                raise LLMError(
+                    f"Ollama embed returned {len(got)} vectors for {len(batch)} inputs ({name})"
+                )
+            vectors.extend(got)
         return vectors
 
     def load_prompt(self, name: str, **variables: object) -> str:

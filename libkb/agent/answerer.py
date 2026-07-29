@@ -114,6 +114,7 @@ def _grounded(quote: str, evidence_norm: str, *, w: int = 12, thresh: float = 0.
     hits = sum(1 for g in grams if g in evidence_norm)
     return hits / len(grams) >= thresh
 
+
 # The confidence gate is ORDINAL: `medium` demands the model rule out `low`; `high` demands it rule
 # out `low` and `medium`. Anything the model returns outside the enum is treated as `medium` — the
 # schema constrains it, but a gate must not crash on a surprise value.

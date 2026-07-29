@@ -141,24 +141,33 @@ def health(request: Request) -> dict:
 
 @router.get("/models")
 def models() -> dict:
-    """The picker's menu. `tools` is the honest part: a Qwen model cannot run the tree-WALK (tool
-    calling is Gemini-only, llm/client.py), so the UI must grey it out *before* the user picks it
-    rather than let a walk die halfway through. The cascade — the default — is tool-free, so every
-    model here can run it."""
+    """The picker's menu. `tools` is the honest part: a Qwen, Claude or Ollama model cannot run the
+    tree-WALK (tool calling is Gemini-only, llm/client.py), so the UI must grey it out *before* the
+    user picks it rather than let a walk die halfway through. The cascade — the default — is
+    tool-free, so every model here can run it."""
     from libkb.llm.client import get_llm
 
     settings = get_settings()
     llm = get_llm()
+    # A model is offered as working only if its provider is actually configured. Ollama is the one
+    # case where a key is not the test: a LOCAL daemon needs none, while Ollama Cloud (any non-local
+    # host) does — so the check follows the host, not the provider.
+    ollama_local = "localhost" in settings.ollama_host or "127.0.0.1" in settings.ollama_host
+    available_by_provider = {
+        "gemini": True,
+        "dashscope": bool(settings.dashscope_api_key),
+        "bedrock": True,  # boto3 reads the standard AWS chain itself; we never inspect it
+        "ollama": ollama_local or bool(settings.ollama_api_key),
+    }
     rows = []
-    for name in settings.selectable_models:
-        dashscope = not llm.supports_tools(name)
+    for name in settings.model_menu():
+        provider = llm.provider_of(name)
         rows.append(
             {
                 "name": name,
-                "provider": "dashscope" if dashscope else "gemini",
-                "tools": not dashscope,
-                # a model whose provider has no key configured must not be offered as if it worked
-                "available": bool(settings.dashscope_api_key) if dashscope else True,
+                "provider": provider,
+                "tools": provider == "gemini",
+                "available": available_by_provider.get(provider, True),
             }
         )
     return {

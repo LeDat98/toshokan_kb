@@ -1,0 +1,19 @@
+{
+  "id": "nd_01KXJ495D80XA84W0EAW2Q5XNM",
+  "kind": "book",
+  "slug": "pdf-retrieval-augmented-question-answering",
+  "title": "PDF Retrieval Augmented Question Answering",
+  "description": "23 sections: Overview, Abstract, 1 Introduction…",
+  "description_rev": 1,
+  "parent_id": "nd_01KX82V9HDAANS60MBR2GEHJJY",
+  "see_also": [],
+  "stats": {
+    "n_shelves": 0,
+    "n_books": 0,
+    "n_pages": 23,
+    "last_ingest_at": null
+  },
+  "uncatalogued": false,
+  "created_at": "2026-07-15T05:34:04.200894Z",
+  "updated_at": "2026-07-16T15:13:07.036896Z"
+}

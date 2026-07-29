@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # How many candidates each retrieval depth tier fetches and hands to triage (see `cascade_depth`).
@@ -52,6 +52,46 @@ class Settings(BaseSettings):
         "global.anthropic.",
         "eu.anthropic.",
     )
+
+    # A FOURTH provider: OLLAMA — open-weight models, run LOCALLY (marginal cost $0) or on Ollama
+    # Cloud (a flat subscription, not per-token). ONE code path serves both: they speak the same
+    # `/api/*` protocol and differ only by host and bearer token, so "local vs cloud" is an env var,
+    # not a branch. It needs NO new SDK either — `httpx` is already a dependency — and the native
+    # API gives two things the OpenAI-compatible shim does not:
+    #   * `format: <json schema>` — the schema is ENFORCED by constrained decoding. That is the
+    #     direct structural fix for the D-040 class of defect (DashScope does not enforce a schema,
+    #     so a malformed reply crashed the parser and 439/2,079 pages silently left the corpus).
+    #   * `think` — most Ollama cloud models reason by default and every reasoning token is billed
+    #     GPU-time we do not need on a triage call. Default off; raise it deliberately.
+    #
+    # Routing is by model name like the other providers, but through an EXPLICIT `ollama/` prefix
+    # instead of a bare vendor string. That is not decoration: Ollama serves `qwen3.5`, `gemma4` and
+    # even `gemini-3-flash-preview` under its own roof, so a bare-name rule would collide with
+    # `dashscope_prefixes=("qwen", …)` and with Gemini itself. So
+    # `LIBKB_MODEL=ollama/gpt-oss:120b-cloud` is then the whole configuration.
+    #
+    # ⚠️ The embedder warning above applies with FULL force here. Ollama Cloud hosts NO embedding
+    # model (its embedders are local-only), and an Ollama embedder is a different coordinate system
+    # from gemini-embedding-001 — so pointing `LIBKB_EMBED_MODEL` at one invalidates every catalog
+    # row and every retrieval number in the SCORECARD. Move GENERATION first (cheap, reversible,
+    # measurable); move the embedder only as a separate, fully re-indexed head-to-head.
+    ollama_host: str = Field(default="http://localhost:11434", alias="LIBKB_OLLAMA_HOST")
+    ollama_api_key: str = Field(default="", alias="OLLAMA_API_KEY")
+    ollama_prefix: str = "ollama/"
+    # A cold local model must LOAD before it answers, and a 120B cloud model thinks for a while;
+    # 60s (the DashScope value) would turn a healthy slow call into a spurious retry storm.
+    ollama_timeout: float = Field(default=180.0, alias="LIBKB_OLLAMA_TIMEOUT")
+    # "false" | "true" | "low" | "medium" | "high" | "max" | "" (= do not send the field at all).
+    ollama_think: str = Field(default="false", alias="LIBKB_OLLAMA_THINK")
+    # Ollama has no `task_type`, so gemini's RETRIEVAL_QUERY/RETRIEVAL_DOCUMENT asymmetry has no
+    # counterpart — each open embedder encodes it as an instruction PREFIX instead, and the wording
+    # is model-specific (qwen3-embedding wants "Instruct: …\nQuery: ", embeddinggemma wants
+    # "task: search result | query: ", bge-m3 wants nothing). So it is configuration, not a guess.
+    ollama_embed_query_prefix: str = Field(default="", alias="LIBKB_OLLAMA_EMBED_QUERY_PREFIX")
+    # Extra entries for the UI model picker, e.g. LIBKB_OLLAMA_MODELS=gpt-oss:120b-cloud,qwen3.5:27b
+    # Empty by default ON PURPOSE: which models exist depends on what this machine/account has
+    # pulled, and a menu entry that 404s is worse than no entry.
+    ollama_models: tuple[str, ...] = Field(default=(), alias="LIBKB_OLLAMA_MODELS")
 
     # Two tiers by MEASURED difficulty (D-027). `model` drives navigation/answering — the eval
     # showed flash-lite collapses there (page 54% vs 86%), so it stays on the strong tier.
@@ -194,13 +234,54 @@ class Settings(BaseSettings):
     # ranking a page, made visible to triage in place of the empty display text a text row stores.
     # ~200 chars ≈ 50 tokens/candidate — the same order as the section headers already on the card.
     triage_snippet_chars: int = Field(default=200, alias="LIBKB_TRIAGE_SNIPPET_CHARS")
+    # WHAT THE SELECTOR SEES per candidate (Tier 0). The measured problem is not that the LLM ranks
+    # worse than the embedder — a cross-encoder that tried to out-rank it LOST (D-048). It is that
+    # the LLM is asked to choose on ~59 tokens of mostly-uninformative section titles, which is the
+    # single weakest selector configuration the reranking literature reports. So enrich the CARD,
+    # do not re-order the list. Anthropic's Contextual Retrieval is the same move at index time
+    # (50–100 tokens of context prepended before embedding → −35% retrieval failures); this is its
+    # query-time, ZERO-LLM cousin, computed from the body already fetched.
+    #   "lean" — the shipped card (D-035/D-050): the matched row OR one passage, spine, bare titles.
+    #   "rich" — passages AND the matched row (they answer different questions), `triage_passages`
+    #            of them, and the section titles whose text overlaps the query MARKED.
+    # Default lean = the measured-safe state; `probe-selection` is the harness that has to earn the
+    # switch. Cost is input tokens on ONE call and no generation at all.
+    # FILL THE BASKET (D-069). MEASURED: every selector is allowed 20 pages and takes 3-4, and
+    # retention tracks pages-taken almost perfectly across arms — so under-filling, not mis-picking,
+    # is the defect. This injects one block telling the selector that the basket is a CEILING it is
+    # expected to approach, not a target to stay under. Free: no extra call, ~60 tokens.
+    triage_fill: bool = Field(default=False, alias="LIBKB_TRIAGE_FILL")
+    triage_card: Literal["lean", "rich"] = Field(default="lean", alias="LIBKB_TRIAGE_CARD")
+    triage_passages: int = Field(default=3, alias="LIBKB_TRIAGE_PASSAGES")
     # SELECTION mechanism (D-053 experiment): "headers" = triage reads section HEADERS on the strong
     # model (the shipped cascade). "read" = a CHEAP subagent reads the top-N candidate BODIES on the
-    # lite tier and picks the basket — the diagnostic showed header-triage drops 24 pts of gold, so
-    # reading content might select better AND cheaper (it reads few bodies on a cheap model, then
-    # the strong answerer opens only the picks). triage_read_n bounds how many bodies it reads;
-    # triage_read_chars truncates each so one giant page cannot blow the selector's budget.
-    triage_mode: Literal["headers", "read"] = Field(default="headers", alias="LIBKB_TRIAGE_MODE")
+    # lite tier and picks the basket — REFUTED (D-053: ANSWER −7.0, only ~7% cheaper).
+    # "set" = SET-SELECTION (Tier 2): the same one call over the same cards, but asked *"which pages
+    # TOGETHER cover this question?"* rather than *"is this page relevant?"* — comparative not
+    # pointwise, with each pick stating what it adds that the others do not, plus an explicit
+    # `missing`. It optimises COVERAGE of a set, which is what AllGold measures and what no cosine
+    # can express (cosine cannot know page B fills the hole page A left). Same cost as "headers".
+    # "trace" = `set` PLUS a tool result (D-066): the coverage map is computed over the pool
+    # (0 LLM) and handed to the selector, so it is TOLD which candidate covers which part of a
+    # compound question instead of inferring it from titles. Same call count as "set".
+    triage_mode: Literal["headers", "read", "set", "trace", "agent"] = Field(
+        default="headers", alias="LIBKB_TRIAGE_MODE"
+    )
+    # THE POOL AGENT (D-066/D-067) — `triage_mode="agent"`. A ReAct loop where the librarian is
+    # given TOOLS over the 50-100 candidates and decides for itself what to check before committing:
+    # find_in_candidates / coverage_map / read_section (all free) and ask_page (one lite call).
+    # It is NOT the walk (D-036, refuted): the candidate set is fixed before the loop starts, so
+    # there is no wrong turn to be unrecoverable from — the worst a bad tool call costs is a step.
+    # BUDGETS ARE ENFORCED IN CODE, never in the prompt (D-008): a model asked nicely to stop will
+    # not. Three independent ceilings, and running out closes the loop out with one forced `select`
+    # rather than losing the turn.
+    # 6 → 8 (D-069). At 6 the loop ran out of steps on 147 of 150 queries and had to be
+    # closed out. Batching + a visible deadline should mean it rarely needs even 6; the extra
+    # two are insurance for the genuinely hard question, not permission to wander.
+    pool_max_steps: int = Field(default=8, alias="LIBKB_POOL_MAX_STEPS")
+    pool_max_lite_calls: int = Field(default=3, alias="LIBKB_POOL_MAX_LITE_CALLS")
+    pool_max_reads: int = Field(default=6, alias="LIBKB_POOL_MAX_READS")
+    pool_ask_chars: int = Field(default=6000, alias="LIBKB_POOL_ASK_CHARS")
     triage_read_n: int = Field(default=10, alias="LIBKB_TRIAGE_READ_N")
     triage_read_chars: int = Field(default=2000, alias="LIBKB_TRIAGE_READ_CHARS")
     # SPEC B — expert consult (D-057). The audit settled what the failure actually is: of the
@@ -397,6 +478,25 @@ class Settings(BaseSettings):
         default=0.80, alias="LIBKB_CATALOG_SHORTCUT_THRESHOLD"
     )  # near-inert sanity floor
     catalog_margin: float = Field(default=0.05, alias="LIBKB_CATALOG_MARGIN")
+
+    @field_validator("ollama_models", mode="before")
+    @classmethod
+    def _split_ollama_models(cls, value: object) -> object:
+        """Accept a plain comma-separated env var (pydantic would otherwise demand a JSON list) and
+        normalise every entry to a routable id — a menu entry without the `ollama/` prefix would be
+        sent to Gemini, which is the one failure mode that looks like a model bug rather than a
+        config one."""
+        if isinstance(value, str):
+            value = [part.strip() for part in value.split(",") if part.strip()]
+        if isinstance(value, (list, tuple)):
+            prefix = "ollama/"
+            return tuple(m if m.startswith(prefix) else prefix + m for m in value)
+        return value
+
+    def model_menu(self) -> tuple[str, ...]:
+        """What the UI picker offers: the built-in menu plus whatever Ollama models this deployment
+        declares. A method, not a field, so the two lists stay independently configurable."""
+        return tuple(self.selectable_models) + tuple(self.ollama_models)
 
     @model_validator(mode="after")
     def _window_from_depth(self) -> "Settings":

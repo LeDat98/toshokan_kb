@@ -1,0 +1,299 @@
+{
+  "book_id": "nd_01KXJ495D80XA84W0EAW2Q5XNM",
+  "chapters": [
+    {
+      "title": "Contents",
+      "entries": [
+        {
+          "page_id": "nd_01KXJ495DWZQHEKGZQYP260YFC",
+          "title": "Overview",
+          "one_line": "**Thi Thu Uyen Hoang Meenakshi Rajendran Kun Zhang Yuhan Wu Viet Anh Nguyen** Saarland University `{thho00003, mera00002",
+          "keywords": [
+            "RAG",
+            "PDF parsing",
+            "Saarland University",
+            "Question Answering",
+            "Research paper metadata"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ497R33SWZW5209QFT4MW9",
+          "title": "Abstract",
+          "one_line": "This paper presents an advancement in Question-Answering (QA) systems using a Retrieval Augmented Generation (RAG) frame",
+          "keywords": [
+            "RAG",
+            "PDF parsing",
+            "multimodal QA",
+            "information extraction",
+            "LLM fine-tuning",
+            "document intelligence"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49A5W2B6E9Q15Y93197FJ",
+          "title": "1 Introduction",
+          "one_line": "Recent progress in machine learning and natural language processing has remarkably improved interactions with digital do",
+          "keywords": [
+            "RAG",
+            "PDF parsing",
+            "multimodal AI",
+            "information extraction",
+            "document intelligence",
+            "LLM"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49CCNR0TAZ7D641SF12M3",
+          "title": "2 Related Work",
+          "one_line": "The rapid advancement in multimodal QA stems from integrating RAG into multi-data modality frameworks.",
+          "keywords": [
+            "RAG",
+            "PDFTriage",
+            "Multimodal QA",
+            "LLM",
+            "Chain-of-Action",
+            "ChatQA"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49EWMCY6W0KGD1MPPQ0R8",
+          "title": "3 Methodology — 3.1 Objective",
+          "one_line": "A primary issue with RAG QA systems with PDFs is the automated extraction of elements like text, images and tables.",
+          "keywords": [
+            "RAG",
+            "PDF extraction",
+            "multi-modal retrieval",
+            "data parsing",
+            "document intelligence"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49H9VBFD1B4ZGYHYK4GNE",
+          "title": "3 Methodology — 3.2 System Design",
+          "one_line": "Figure 1: PIER-QA: PDF Integrated Enhanced Retrieval Question Answering Given a query _q_ and a set of PDF documents _{D",
+          "keywords": [
+            "PIER-QA",
+            "DBSCAN",
+            "Marker",
+            "GTE-large",
+            "ElasticSearch",
+            "RAPTOR"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49KSF0CAV0V89V5ZJAK3W",
+          "title": "3 Methodology — 3.2.1 PDF Preprocessing",
+          "one_line": "Figure 2: PDF Preprocessing",
+          "keywords": [
+            "PDF parsing",
+            "text extraction",
+            "document preprocessing",
+            "OCR",
+            "layout analysis",
+            "data cleaning"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49NXV4TPJ7WPJCSSPCNX9",
+          "title": "3 Methodology — Header and footer removal",
+          "one_line": "The removal of headers and footers is an important preprocessing step as they could interfere with the retrieval process",
+          "keywords": [
+            "DBSCAN",
+            "PDF preprocessing",
+            "bounding box",
+            "noise reduction",
+            "document parsing",
+            "spatial clustering"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49RBZK3GZ2ZRDKK1KPQBE",
+          "title": "3 Methodology — PDF to Markdown conversion",
+          "one_line": "This step employs Marker (Venkatramana, 2023), a software utility tool designed for identifying and extracting various t",
+          "keywords": [
+            "Marker",
+            "DBSCAN",
+            "PDF parsing",
+            "Markdown conversion",
+            "Header removal",
+            "Image extraction"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49TGYT5MMQPP3F2ZEWGQK",
+          "title": "3 Methodology — Image and Table Processing",
+          "one_line": "One key improvement is generating captions to the images which alleviates image modality and turns the input into LLM’s",
+          "keywords": [
+            "LLaVA",
+            "image captioning",
+            "markdown tables",
+            "data compression",
+            "multimodal RAG",
+            "LLaMA"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49WK4R7165XT99PRVBGY1",
+          "title": "3 Methodology — 3.2.2 Embedding and storage",
+          "one_line": "The first step involves breaking down the processed document _D_<sup>ˆ</sup> _imarkdown_ into smaller chunks _{c_ 1 _, c",
+          "keywords": [
+            "RAPTOR",
+            "Elasticsearch",
+            "Vector embeddings",
+            "Semantic indexing",
+            "Document chunking",
+            "Tree-structured index"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ49YYEVS4ZHR9PCXZ41R5Z",
+          "title": "3 Methodology — RAG-Aware LLM Finetuning",
+          "one_line": "To make the LLM adapt to the document domain as well as being aware of our Markdown format, image, and table structure,",
+          "keywords": [
+            "RAG-Llama3-70B",
+            "LoRA",
+            "LLM finetuning",
+            "synthetic data generation",
+            "A100",
+            "context chunking"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4A14KRR52TMQ0DPJ6ZS2D",
+          "title": "3 Methodology — Query Processing and Retrieval",
+          "one_line": "Upon receiving a query _q_ , the query is also embedded into the same high-dimensional vector space: The system performs",
+          "keywords": [
+            "vector embedding",
+            "cosine similarity",
+            "top-k retrieval",
+            "query processing",
+            "semantic search"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4A39607SJQAFFEHTMJ6JN",
+          "title": "3 Methodology — Prompt Injection and Answer Generation",
+          "one_line": "The retrieved chunks are appended to the query in the prompt.",
+          "keywords": [
+            "Prompt injection",
+            "Context retrieval",
+            "LLM response generation",
+            "Image reference extraction",
+            "Markdown table conversion",
+            "RAG architecture"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4A5Q5CMB4E1Q50SRFPCNX",
+          "title": "4 Experiments",
+          "one_line": "### **4.1 Data Collection** Our dataset consists of 8 private internal documents from a production company.",
+          "keywords": [
+            "GTE-large",
+            "accuracy@0.85",
+            "GPT-4o",
+            "embedding similarity",
+            "test dataset",
+            "performance evaluation"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4A7XWNSRD9SYYQCYY6B55",
+          "title": "5 Results",
+          "one_line": "### **5.1 Comparison with Baseline** To benchmark our system, we compared it with a baseline system that employs a simil",
+          "keywords": [
+            "PIER-QA",
+            "RAG-Llama3-70B",
+            "GPT-4o",
+            "Retrieval Accuracy",
+            "Document Preprocessing",
+            "Table and Image Retrieval"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4AADNKS9TBYQA4CCHY2PP",
+          "title": "6 Limitations",
+          "one_line": "DBSCAN clustering algorithm might not always differentiate headers, footers and the main content, especially in highly v",
+          "keywords": [
+            "DBSCAN",
+            "PDF parsing",
+            "Markdown conversion",
+            "latency",
+            "data extraction",
+            "retrieval overhead"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4ACMPYAZCZBVNWYCMMDN2",
+          "title": "7 Conclusion",
+          "one_line": "In conclusion, our work significantly extends the powers of RAG frameworks by dealing with different data modalities in",
+          "keywords": [
+            "RAG",
+            "PDF parsing",
+            "LLM finetuning",
+            "multimodal QA",
+            "GPT-4o",
+            "system evaluation"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4AEWV455X6ATPH4HH8ARY",
+          "title": "References",
+          "one_line": "Yejin Bang, Samuel Cahyawijaya, Nayeon Lee, Wenliang Dai, Dan Su, Bryan Wilie, Holy Lovenia, Ziwei Ji, Tiezheng Yu, Will",
+          "keywords": []
+        },
+        {
+          "page_id": "nd_01KXJ4AEXXGH383K4FPVZSG6GP",
+          "title": "A Training data generation prompts",
+          "one_line": "The data generation consists of two steps: question generation and answer generation.",
+          "keywords": [
+            "synthetic data",
+            "prompt engineering",
+            "question generation",
+            "answer generation",
+            "RAG training",
+            "LLM fine-tuning"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4AH2NFSK06JFRDTS8HVWV",
+          "title": "B DBSCAN hyperparameter details",
+          "one_line": "DBSCAN hyperparameter values were selected based on empirical analysis to balance the precision and recall of header/foo",
+          "keywords": [
+            "DBSCAN",
+            "clustering",
+            "min_samples",
+            "epsilon",
+            "PDF processing",
+            "hyperparameters"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4AK84TNNK68J2K2409KSP",
+          "title": "C Marker configurations",
+          "one_line": "The Marker tool in our PDF processing pipeline is responsible for extracting and handling various types of content from",
+          "keywords": [
+            "Marker",
+            "Surya OCR",
+            "Texify",
+            "PDF extraction",
+            "layout detection",
+            "post-processing"
+          ]
+        },
+        {
+          "page_id": "nd_01KXJ4ANDYBHY8WWX9NSQBWYWH",
+          "title": "D Llama3 training hyperparameters",
+          "one_line": "We provide the full list of training hyperparameters for our RAG-Llama3-70B in Table 5.",
+          "keywords": [
+            "Llama3",
+            "QLoRA",
+            "hyperparameters",
+            "OCR",
+            "PDF processing",
+            "fine-tuning"
+          ]
+        }
+      ]
+    }
+  ]
+}

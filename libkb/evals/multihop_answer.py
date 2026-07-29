@@ -157,7 +157,20 @@ def run(
     """Answer every case; parallel by default (backlog #1). Each case is independent — the pool
     shares one LLM client and one read-only catalog. `workers <= 1` is the old sequential loop."""
     llm = llm or get_llm()
-    workers = get_settings().eval_concurrency if workers is None else workers
+    base = get_settings()
+    workers = base.eval_concurrency if workers is None else workers
+    # THE ANSWER CACHE IS OFF FOR EVERY EVAL, ENFORCED HERE AND NOT LEFT TO THE CALLER.
+    #
+    # This has now destroyed two paid runs. The semantic cache (D-062) serves a stored answer to any
+    # question within 0.92 cosine of one already answered — which is exactly right in production and
+    # catastrophic in an A/B: the second arm answers nothing, replays arm A's answers, and the two
+    # arms come back **bit-identical on every metric**. That is what happened here (arm B logged
+    # ZERO `cascade_done` lines and *fewer* input tokens than arm A), and the only reason it was
+    # caught is that identical numbers are implausible enough to look at twice.
+    #
+    # An eval measures the SYSTEM, not the cache. A knob the caller must remember is a knob that
+    # will be forgotten, so this is not configurable from here.
+    settings = base.model_copy(update={"enable_answer_cache": False})
     concurrent = workers > 1 and len(cases) > 1
     if catalog.count():  # build the vector matrix ONCE, before threads race to load it lazily
         catalog.vectors()
@@ -169,7 +182,9 @@ def run(
         # price the whole batch (report.input_total, below) and leave per-case at 0.
         t0 = (llm.total_input_tokens, llm.total_output_tokens)
         try:
-            result = answer_query_safe(case.query, store=store, catalog=catalog, llm=llm)
+            result = answer_query_safe(
+                case.query, store=store, catalog=catalog, llm=llm, settings=settings
+            )
         except Exception as exc:
             # `answer_query_safe` catches LLMError. It does NOT catch a dropped socket, and one of
             # those killed a 301-case run after ~200 paid queries. The answers are the expensive
