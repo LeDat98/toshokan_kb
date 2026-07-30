@@ -425,6 +425,70 @@ class _NoLLM:
     total_output_tokens = 0
 
 
+def test_the_free_size_arms_spend_nothing_and_choose_their_own_basket():
+    """`adaptive` and `conformal` never call a model, and — unlike `embedder` — they are NOT bound
+    by `pools.basket`: choosing the size IS what they do. TP is 2-4 and varies; a fixed basket
+    cannot be a superset of a moving target."""
+    pools = _pools([{"A"}, {"B"}], [["A", "X", "Y"], ["X", "B", "Y"]], basket=1)
+    key_of = {k: k for k in "ABXY"}
+    for arm in ("adaptive", "conformal"):
+        row = next(
+            r
+            for r in run_arm(arm, pools, store=None, key_of=key_of, llm=_NoLLM(), workers=1)
+            if r.kind == "all"
+        )
+        assert row.calls == 0, f"{arm} must be free"
+        assert row.input_tokens == 0 and row.output_tokens == 0
+        assert row.picked > 1, f"{arm} must be free to exceed basket=1"
+
+
+def test_conformal_is_calibrated_before_the_pool_is_scored_not_inside_it():
+    """The leakage guard at arm level: `conformal_thresholds` reads gold, so it must be computed
+    once, up front, for the whole arm — never per query inside the scoring pass."""
+    from libkb.evals.selection import conformal_thresholds, gold_ranks
+
+    pools = _pools([{"A"}, {"B"}], [["X", "A"], ["B", "Y"]], basket=2)
+    key_of = {k: k for k in "ABXY"}
+    assert gold_ranks(pools, key_of, 0) == [1], "gold sits at rank 1 in its own pool"
+    assert gold_ranks(pools, key_of, 1) == [0]
+    thresholds = conformal_thresholds(pools, key_of, alpha=0.1, folds=2, seed=1)
+    assert len(thresholds) == 2
+
+
+def test_a_gold_document_missing_from_the_pool_is_a_ceiling_failure_not_a_threshold_one():
+    from libkb.evals.selection import gold_ranks
+
+    pools = _pools([{"A", "Z"}], [["A", "X"]], basket=2)
+    assert gold_ranks(pools, {"A": "A", "X": "X"}, 0) is None
+
+
+def test_the_matched_control_runs_the_embedder_at_the_same_page_count():
+    """Rule 2 of docs/SELECTION_TARGET.md, enforced in code: an adaptive arm is only better if it
+    beats the embedder TAKING THE SAME NUMBER OF PAGES. Across `taken` is metric bug 6.8."""
+    from libkb.evals.selection import matched_control
+
+    pools = _pools([{"A"}], [["X", "Y", "A", "Z"]], basket=1)
+    ctrl = matched_control(3.0, pools, store=None, key_of={k: k for k in "AXYZ"}, llm=_NoLLM())
+    assert ctrl is not None
+    assert ctrl.taken == 3.0, "the control must commit to the same number of DOCUMENTS"
+    assert ctrl.calls == 0, "the control is free — there is no excuse for skipping it"
+    assert pools.basket == 1, "the control must not mutate the shared pools"
+
+
+def test_the_matched_control_searches_the_basket_because_pages_are_not_documents():
+    """A basket is counted in PAGES and `taken` in DOCUMENTS. Here two pages belong to one article,
+    so a basket of 3 pages commits to only 2 documents — matching the two numbers directly is the
+    same category error rule 2 exists to prevent."""
+    from libkb.evals.selection import matched_control
+
+    pools = _pools([{"A"}], [["a1", "a2", "B", "C", "D"]], basket=1)
+    key_of = {"a1": "A", "a2": "A", "B": "B", "C": "C", "D": "D"}
+    ctrl = matched_control(3.0, pools, store=None, key_of=key_of, llm=_NoLLM())
+    assert ctrl is not None and ctrl.taken == 3.0
+    assert ctrl.picked == 4.0, "it had to take FOUR pages to reach three documents"
+    assert ctrl.arm == "embedder@4"
+
+
 def test_arm_row_reports_per_kind_so_multi_document_kinds_are_visible():
     pools = _pools([{"A"}], [["A"]], basket=1)
     pools.queries[0].kind = "temporal_query"

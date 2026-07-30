@@ -145,6 +145,44 @@ only (a) shortcut to a page or (b) hint the navigator, so an embedding miss can'
 The flywheel writes 8 rows/page (questions_per_page=4 intents × vi+en); `RETRIEVAL_DOCUMENT` at index,
 `RETRIEVAL_QUERY` at lookup (Gemini asymmetric retrieval).
 
+## D-071 · 2026-07-31 · Score-only set sizing is CLOSED — and the same run shows the LLM selector is worth +20
+Two training-free selectors from the literature, built as `probe-selection` arms because TP is 2.75
+and **varies** with the question kind while every selector we have commits to a near-constant 3.0–3.2
+— a constant cannot be a superset of a moving target, and that failure is arithmetic, not judgement.
+Both cost **zero LLM calls**, so the whole result is free. Full numbers: SCORECARD §2.7.
+
+- **Adaptive-k** (arXiv 2506.08479) — cut at the sharpest drop in the sorted scores, take `B` more.
+- **Conformal filtering** (arXiv 2511.17908), adapted — the nonconformity score is the margin each
+  query needed to keep **all** of its gold, so the certified quantity is `superset` itself rather
+  than per-document recall. Cross-fitted over 5 folds: no query is scored under a threshold it helped
+  calibrate. (The leakage guard is a test, not a comment — this project has paid for two metric bugs
+  of that family already.)
+
+**The conformal certificate is exact**, which is the run's own correctness check: predicted absolute
+superset is (1−α) × 0.927 (the pool ceiling), and measured lands within 0.8 points at α = 0.03, 0.1,
+0.2, 0.3 and 0.4. Same class of external check as BM25 0.235 vs BEIR 0.236 (D-065).
+
+**Both are NULL as selectors.** Adaptive-k sits ON the embedder curve (0 to +2 at matched `taken`).
+Conformal is +3…+5 wide and *negative* tight. Neither chooses better; both choose **more**.
+
+**What it settles.** At the target `taken ≈ 4` the best score-only selector reaches ~25–32% superset,
+and reaching 90% from scores alone costs ≈22 documents / ~40,000 ctx tokens — **7× the budget**. *The
+28 missing points are not in the sieve's scores.* Any further score-only set sizing is closed.
+
+**The finding that pays for the run, though, is the other direction.** With the free curve mapped, an
+LLM arm can finally be scored against *doing nothing at the same basket size* — a subtraction nobody
+had computed: `set` **+23**, `rich` **+20**, `agent` **+16** points of superset. Selection is not the
+weak component of this system. **Rule added: never quote an LLM arm without the free number at its
+own `taken` beside it.** `probe-selection` now runs that matched control automatically, bisecting the
+basket until the embedder commits to the same number of DOCUMENTS — a basket is counted in pages and
+`taken` is not, and matching the two directly is the same category error rule 2 exists to prevent.
+
+**Consequence for the open direction:** the completeness check must READ. It must also be a SEPARATE
+judge over the assembled set (every in-prompt variant has failed: D-051, D-068, D-069), score the SET
+rather than its passages (SURE-RAG, arXiv 2605.03534: +18 F1 over GPT-4o-as-judge on exactly this),
+and it is not optional — insufficient context makes a model improvise rather than abstain (*Sufficient
+Context*, ICLR 2025, arXiv 2411.06037: 10.2% → 66.1%), and our honesty is at 100%.
+
 ## D-070 · 2026-07-29 · The scoring contract is fixed: approximate the TRUE-PAGE SET. Everything else is diagnostic.
 **Set by the user, and it closes the framing question for good.** `docs/SELECTION_TARGET.md` is the
 page; this decision records why it outranks the older docs.

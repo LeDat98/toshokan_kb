@@ -70,6 +70,23 @@ Optimise **`superset`**. Report the rest. Do not optimise anything else.
 **Nothing has both.** `rich` is the current best and still throws away **28 points** of coverage
 that was already sitting in the pool.
 
+### The free curve underneath it all (D-071, §2.7) — read every arm against this
+
+Selecting from the sieve's SCORES alone, with no model, costs nothing and is now mapped:
+
+| taken ≈ | 3.2 | 3.8 | 5.4 | 6.4 | 11.1 | 15.8 | 22–24 |
+|---|---|---|---|---|---|---|---|
+| best free superset | 21% | 25% | 40% | 43% | 65% | 83% | 91% |
+
+Two things follow, and both are load-bearing:
+
+1. **The 90% goal is not reachable without reading.** From scores alone it costs ≈22 documents and
+   ~40,000 ctx tokens — about **7×** the budget below. The missing 28 points are not in the scores.
+2. **The LLM selector is already worth ~+20 points of superset at the same `taken`** (`set` +23,
+   `rich` +20, `agent` +16). Selection is not the weak component. **Never quote an LLM arm again
+   without the free number at its own `taken` next to it** — that subtraction is the arm's actual
+   contribution, and for two sessions nobody had computed it.
+
 ### The goal to beat
 
 > **superset ≥ 90% with `taken` ≈ 4 (TP + 1), at ≲ 6,000 ctx tokens.**
@@ -84,6 +101,25 @@ already has `coverage_map`; neither is used to *check itself before committing*.
 was measured and does nothing (`triage_fill`: 4.5 → 4.7 documents, §2.6c). A mechanism: verify every
 part of the question has a source, and only then commit.
 
+**D-071 narrowed this to one live option.** The cheap way out — let a score threshold size the set —
+is measured and closed (above): the coverage is not in the scores. So the check has to READ. Three
+constraints the literature and our own refutations put on it together:
+
+- It must be a **separate judge over the assembled set**, not a line added to the selector's own
+  prompt. `triage_coverage` (D-051), `trace` (D-068) and `triage_fill` (D-069) all failed the same
+  way — telling the selector about completeness convinces it that it is finished.
+- It must score the **set**, not the passages. Set-level sufficiency is not visible passage by
+  passage; a purpose-built set-level verifier beats GPT-4o-as-judge by 18 F1 on exactly this task
+  (SURE-RAG, arXiv 2605.03534).
+- **A tighter basket without this gate costs honesty, not just accuracy.** Insufficient context does
+  not make a model abstain — it makes it improvise (Gemma 10.2% → 66.1% hallucination with
+  insufficient context, *Sufficient Context*, ICLR 2025, arXiv 2411.06037). Our honesty is at 100%
+  and it is the one number the project calls non-negotiable.
+
+Reference for the gate itself: a prompted sufficiency autorater needs no ground truth and agrees
+with human judgement ≥93% of the time (ibid.). That makes it one lite call, and it composes with the
+WIDEN step already in the cascade.
+
 ## 6. Already measured — do NOT re-propose
 
 | tried | verdict | where |
@@ -94,6 +130,9 @@ part of the question has a source, and only then commit.
 | Cheap-reader selector (`read`) | **REFUTED** −7.0 answer | D-053 |
 | Coverage *prompt* (`triage_coverage`) | **REFUTED** | D-051 |
 | "Please fill the basket" (`triage_fill`) | **NULL** — 4.5 → 4.7 | D-069 |
+| Adaptive-k (cut at the sharpest score drop) | **NULL** — 0 to +2 at matched `taken`; sits on the embedder curve | D-071, §2.7 |
+| Conformal filtering (certified coverage) | **+3…+5 wide, negative tight.** Hits its target exactly, but buys coverage with documents, not skill | D-071, §2.7 |
+| Any further score-only set sizing | **CLOSED.** 90% from scores costs ~22 docs / 40k tokens, ~7× the budget | D-071, §2.7 |
 | ReAct pacing fixes (batch, deadline, +steps) | mechanism fixed (commit 35%→98%), score flat, **cost the agent its adaptive tool routing** | D-069 |
 | Query decomposition | **REFUTED** −11…−17 | SCORECARD §3.2 |
 
@@ -112,10 +151,15 @@ LIBKB_DB_PATH=benchmarks/multihop/catalog-text.db LIBKB_LIBRARY_DIR=benchmarks/m
 LIBKB_MODEL=qwen-plus ... libkb probe-selection --limit 150 --arms embedder,headers,rich,set,agent --yes
 ```
 
-The equal-budget control is **free** (0 LLM calls) and must be run before any comparison is quoted:
+The equal-budget control is **free** (0 LLM calls) and must be run before any comparison is quoted.
+`embedder`, `adaptive` and `conformal` all cost nothing, so a run of only those needs no `--yes` and
+prints the **matched control automatically** — the probe bisects the basket until the embedder
+commits to the same number of DOCUMENTS, because a basket is counted in pages and `taken` is not:
 
 ```
-libkb probe-selection --arms embedder --basket 4    # and 5, 10, 20
+libkb probe-selection --arms embedder,adaptive,conformal          # free, no --yes needed
+libkb probe-selection --arms conformal --alpha 0.03               # what 90% actually costs
+libkb probe-selection --arms embedder --basket 4                  # and 5, 10, 20
 ```
 
 **Answer-level confirmation** (`eval-multihop`) is the last gate before changing a default —

@@ -22,6 +22,21 @@ emits `missing`, the agent already has `coverage_map`, and neither self-checks b
 Build a **completeness check before `select`**. Instruction does not work — measured (`triage_fill`
 moved 4.5 → 4.7). It needs a mechanism.
 
+### ✅ 2026-07-31 (D-071): the cheap way out is CLOSED, and the LLM layer is vindicated
+Adaptive-k and conformal filtering built as free arms (`libkb/evals/setsize.py`, 0 LLM). Both **NULL
+as selectors** — adaptive sits on the embedder curve, conformal is +3…+5 only when wide. The
+conformal certificate is exact ((1−α)×0.927 predicted vs measured, within 0.8 at five α values),
+which is the run's own correctness check.
+- **Score-only set sizing is closed.** At `taken ≈ 4` the best free selector reaches ~25–32%; 90%
+  from scores costs ≈22 documents / ~40k ctx tokens, **7× the budget**. The missing 28 points are
+  not in the scores — the check has to READ.
+- **The free curve finally prices the LLM arms:** `set` **+23**, `rich` **+20**, `agent` **+16**
+  superset over doing nothing at the same `taken`. Selection is not the weak component.
+- **New standing rule:** never quote an LLM arm without the free number at its own `taken`.
+  `probe-selection` now runs that matched control itself (bisecting the basket, because a basket is
+  pages and `taken` is documents).
+- Free arms need no `--yes`: `libkb probe-selection --arms embedder,adaptive,conformal`.
+
 ---
 
 ## ⚡ SESSION 13: the SELECTION layer — three things shipped, ZERO numbers yet (D-064)

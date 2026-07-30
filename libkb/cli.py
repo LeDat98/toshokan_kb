@@ -15,6 +15,8 @@ from libkb.library.store import LibraryStore
 # whole eval stack on every `libkb --help`. tests/test_selection.py asserts the two never drift.
 _SEL_ARMS = (
     "embedder",
+    "adaptive",
+    "conformal",
     "headers",
     "rich",
     "rich+fill",
@@ -25,7 +27,16 @@ _SEL_ARMS = (
     "agent",
     "read",
 )
-_SEL_DEFAULT_ARMS = ("embedder", "headers", "rich", "rich+fill", "set", "agent")
+_SEL_DEFAULT_ARMS = (
+    "embedder",
+    "adaptive",
+    "conformal",
+    "headers",
+    "rich",
+    "rich+fill",
+    "set",
+    "agent",
+)
 _LEX_ARMS = ("dense", "bm25", "bm25-stop", "hybrid", "hybrid-stop", "hybrid-rare")
 _LEX_DEFAULT_ARMS = ("dense", "bm25", "hybrid", "hybrid-stop", "hybrid-rare")
 
@@ -223,6 +234,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     sel_parser.add_argument("--fetch", type=int, default=0, help="0 = the configured window")
     sel_parser.add_argument("--basket", type=int, default=0, help="0 = the configured basket")
+    sel_parser.add_argument(
+        "--alpha",
+        type=float,
+        default=0.10,
+        help="`conformal` arm: miss rate to certify. 0.10 targets superset >= 90%%, the goal in "
+        "docs/SELECTION_TARGET.md. Costs pages — that price is the measurement",
+    )
+    sel_parser.add_argument(
+        "--buffer",
+        type=int,
+        default=5,
+        help="`adaptive` arm: pages taken past the sharpest score drop (Adaptive-k's B)",
+    )
     sel_parser.add_argument("--save", default=None, help="Write the rows as JSON")
     sel_parser.add_argument(
         "--yes",
@@ -1162,7 +1186,15 @@ def _cmd_probe_selection(args, settings) -> int:
     from pathlib import Path
 
     from libkb.catalog.store import Catalog
-    from libkb.evals.selection import ARMS, build_pools, estimate, load_multihop, run
+    from libkb.evals.selection import (
+        ARMS,
+        build_pools,
+        estimate,
+        load_multihop,
+        matched_control,
+        run,
+    )
+    from libkb.evals.setsize import DEFAULT_FOLDS
 
     arms = tuple(a.strip() for a in args.arms.split(",") if a.strip())
     unknown = [a for a in arms if a not in ARMS]
@@ -1213,10 +1245,14 @@ def _cmd_probe_selection(args, settings) -> int:
             "    Use the strong tier only when the absolute number must line up with\n"
             "    the SCORECARD's existing runs."
         )
-    if not args.yes:
+    # A run of FREE arms only has nothing to confirm — asking would make the two zero-cost selectors
+    # (`adaptive`, `conformal`) look as expensive as the ones that call a model.
+    if total_calls and not args.yes:
         catalog.close()
         print("\nNothing spent. Re-run with --yes to pay this and get the numbers.")
         return 0
+    if not total_calls:
+        print("  every requested arm is free — running it.")
 
     rows = run(
         pools,
@@ -1224,6 +1260,9 @@ def _cmd_probe_selection(args, settings) -> int:
         key_of=key_of,
         arms=arms,
         settings=settings,
+        alpha=args.alpha,
+        buffer=args.buffer,
+        seed=args.seed,
         progress=lambda m: print(f"  {m}"),
     )
     catalog.close()
@@ -1243,14 +1282,43 @@ def _cmd_probe_selection(args, settings) -> int:
         f"must then read: the real bill."
     )
     print(
-        f"\n  {'arm':<10}{'superset':>10}{'taken':>7}{'over':>6}{'prec':>7}{'ctx tok':>9}"
+        f"\n  {'arm':<12}{'superset':>10}{'taken':>7}{'over':>6}{'prec':>7}{'ctx tok':>9}"
         f"{'retention':>11}{'coverage':>10}{'empty':>7}{'calls':>7}{'in tok':>11}"
     )
-    for row in overall:
+
+    def _row(row) -> None:
         print(
-            f"  {row.arm:<10}{row.allgold:>10.1%}{row.taken:>7.1f}{row.overhead:>6.1f}"
+            f"  {row.arm:<12}{row.allgold:>10.1%}{row.taken:>7.1f}{row.overhead:>6.1f}"
             f"{row.precision:>7.1%}{row.ctx_tokens:>9,.0f}{row.retention:>11.1%}"
             f"{row.coverage:>10.1%}{row.empty:>7}{row.calls:>7}{row.input_tokens:>11,}"
+        )
+
+    for row in overall:
+        _row(row)
+
+    # THE MATCHED CONTROL, RUN AUTOMATICALLY BECAUSE ADVICE WAS NOT ENOUGH. Every arm here that
+    # chooses a set SIZE must be read against the embedder taking the SAME number of pages —
+    # otherwise the comparison measures budget, which is metric bug 6.8 and it inverted this
+    # project's founding conclusion for several sessions. It is free, so there is no excuse to skip.
+    controls = [r for r in overall if r.arm in ("adaptive", "conformal") and r.n]
+    if controls:
+        print("\n  ── matched controls (free): the same page count, chosen by cosine alone ──")
+        for row in controls:
+            ctrl = matched_control(row.taken, pools, store=store, key_of=key_of, settings=settings)
+            if ctrl is not None:
+                _row(ctrl)
+        print(
+            "  An adaptive arm that does not beat its own control did not select better —\n"
+            "  it only selected MORE. (SELECTION_TARGET rule 2)"
+        )
+    if any(r.arm == "conformal" for r in overall):
+        print(
+            f"\n  `conformal` was calibrated to certify superset >= {1 - args.alpha:.0%} "
+            f"(alpha={args.alpha:g}), cross-fitted\n"
+            f"  over {DEFAULT_FOLDS} folds so no query was scored under a threshold it helped\n"
+            f"  set. The guarantee is MARGINAL (across queries, not per query) and holds only\n"
+            f"  where the pool contained TP — here {ceiling_all:.1%}. Read `taken` and `ctx tok`\n"
+            f"  next to it: that is what the {1 - args.alpha:.0%} target actually costs."
         )
     print(
         "\nsuperset = the fraction of queries where the selection contained EVERY true\n"

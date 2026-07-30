@@ -48,7 +48,7 @@ from __future__ import annotations
 import json
 import random
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import structlog
@@ -56,15 +56,22 @@ import structlog
 from libkb.catalog.store import Catalog, Hit
 from libkb.concurrency import parallel_map
 from libkb.config import Settings, get_settings
+from libkb.evals import setsize
 from libkb.evals.multihop import article_of_page
 from libkb.library.store import LibraryStore
 from libkb.llm.client import LLM, get_llm
 
 log = structlog.get_logger(__name__)
 
-# arm name → (triage_mode, triage_card). "embedder" is special-cased: it makes no LLM call at all.
+# arm name → (triage_mode, triage_card). An EMPTY mode marks a FREE arm: it makes no LLM call at
+# all, `estimate()` prices it at zero, and `one()` below dispatches it by name. Three of them now —
+# the embedder's fixed top-k, and the two set-SIZE selectors of `evals/setsize.py`, which choose how
+# many pages to keep from the sieve's own scores because TP is 2-4 and varies while every selector
+# measured so far commits to a near-constant 3.0-3.2.
 ARMS: dict[str, tuple[str, str, bool]] = {
     "embedder": ("", "", False),
+    "adaptive": ("", "", False),
+    "conformal": ("", "", False),
     "headers": ("headers", "lean", False),
     "rich": ("headers", "rich", False),
     "rich+fill": ("headers", "rich", True),
@@ -75,7 +82,11 @@ ARMS: dict[str, tuple[str, str, bool]] = {
     "agent": ("agent", "lean", False),
     "read": ("read", "lean", False),
 }
-DEFAULT_ARMS = ("embedder", "headers", "rich", "rich+fill", "set", "agent")
+DEFAULT_ARMS = ("embedder", "adaptive", "conformal", "headers", "rich", "rich+fill", "set", "agent")
+
+# Arms that spend nothing. Kept as a set rather than inferred from an empty mode so that adding a
+# paid arm can never make it free by accident.
+FREE_ARMS = frozenset({"embedder", "adaptive", "conformal"})
 
 
 @dataclass
@@ -220,6 +231,41 @@ def _keys(page_ids: list[str], key_of: dict[str, str]) -> list[str]:
     return out
 
 
+def gold_ranks(pools: Pools, key_of: dict[str, str], i: int) -> list[int] | None:
+    """Where this query's gold documents sit in its own ranked pool — the deepest one is what a
+    score threshold would have to reach. None if any gold is absent from the pool (a sieve failure,
+    already counted as `ceiling`; no threshold can repair it and letting it in would poison the
+    calibration)."""
+    batch = pools.ranked[i][: pools.fetch_n]
+    ranks: list[int] = []
+    for key in pools.queries[i].gold:
+        rank = next((j for j, h in enumerate(batch) if key_of.get(h.page_id) == key), None)
+        if rank is None:
+            return None
+        ranks.append(rank)
+    return ranks
+
+
+def conformal_thresholds(
+    pools: Pools,
+    key_of: dict[str, str],
+    *,
+    alpha: float = setsize.DEFAULT_ALPHA,
+    folds: int = setsize.DEFAULT_FOLDS,
+    seed: int = 11,
+) -> list[float]:
+    """A per-query score threshold, cross-fitted so no query is scored under a threshold it helped
+    calibrate. The calibration target is the SET objective: the margin each query would have needed
+    to keep ALL of its gold, so the certified quantity is `superset` itself."""
+    required = [
+        setsize.required_margin(
+            [h.score for h in pools.ranked[i][: pools.fetch_n]], gold_ranks(pools, key_of, i) or []
+        )
+        for i in range(len(pools.queries))
+    ]
+    return setsize.cross_fit_thresholds(required, alpha=alpha, folds=folds, seed=seed)
+
+
 def run_arm(
     arm: str,
     pools: Pools,
@@ -229,6 +275,9 @@ def run_arm(
     llm: LLM | None = None,
     settings: Settings | None = None,
     workers: int | None = None,
+    alpha: float = setsize.DEFAULT_ALPHA,
+    buffer: int = setsize.DEFAULT_BUFFER,
+    seed: int = 11,
     progress=None,
 ) -> list[ArmRow]:
     """One arm over every query. Runs whole-arm-at-a-time (not arm-inside-query) so the client's
@@ -246,12 +295,26 @@ def run_arm(
         else base
     )
     before = (llm.total_input_tokens, llm.total_output_tokens)
+    # Calibrated ONCE for the whole arm, before any query is scored. Cheap (no model, no I/O) but it
+    # reads gold labels, so it must never be computed inside `one()` where it would silently see the
+    # query it is about to score.
+    thresholds = (
+        conformal_thresholds(pools, key_of, alpha=alpha, seed=seed)
+        if arm == "conformal"
+        else [0.0] * len(pools.queries)
+    )
 
     def one(i: int) -> list[str] | None:
         """→ the page_ids this arm selected for query i."""
         batch = pools.ranked[i][: pools.fetch_n]
         if arm == "embedder":
             return [h.page_id for h in batch][: pools.basket]
+        if arm == "adaptive":
+            k = setsize.adaptive_k([h.score for h in batch], buffer=buffer)
+            return [h.page_id for h in batch[:k]]
+        if arm == "conformal":
+            keep = setsize.conformal_keep([h.score for h in batch], thresholds[i])
+            return [batch[j].page_id for j in keep]
         try:
             picked, _ = selector_for(mode)(
                 pools.queries[i].text, batch, store, llm, s, pools.basket
@@ -302,7 +365,7 @@ def run_arm(
             import libkb.agent.poolagent as pa
 
             pa.OBSERVER = None
-    calls = sum(1 for sel in selections if sel is not None) if arm != "embedder" else 0
+    calls = 0 if arm in FREE_ARMS else sum(1 for sel in selections if sel is not None)
 
     kinds = ["all", *sorted({q.kind for q in pools.queries})]
     acc: dict[str, dict[str, float]] = {
@@ -403,6 +466,9 @@ def run(
     llm: LLM | None = None,
     settings: Settings | None = None,
     workers: int | None = None,
+    alpha: float = setsize.DEFAULT_ALPHA,
+    buffer: int = setsize.DEFAULT_BUFFER,
+    seed: int = 11,
     progress=None,
 ) -> list[ArmRow]:
     out: list[ArmRow] = []
@@ -417,9 +483,71 @@ def run(
             llm=llm,
             settings=settings,
             workers=workers,
+            alpha=alpha,
+            buffer=buffer,
+            seed=seed,
             progress=progress,
         )
     return out
+
+
+def matched_control(
+    taken: float,
+    pools: Pools,
+    *,
+    store: LibraryStore,
+    key_of: dict[str, str],
+    llm: LLM | None = None,
+    settings: Settings | None = None,
+    workers: int | None = None,
+) -> ArmRow | None:
+    """`embedder` re-run at whatever fixed basket makes it commit to the SAME NUMBER OF DOCUMENTS —
+    the control an adaptive arm has to beat before its adaptivity has been shown to do anything.
+
+    This exists as code, not as advice, because the advice was already written down and the project
+    still spent several sessions on a conclusion that was a basket-size artefact (metric bug 6.8).
+
+    **The basket is measured in PAGES and `taken` in DOCUMENTS**, and they are not the same number —
+    the splitter cuts one article into several pages, so a basket of 7 pages commits to about 5
+    documents. Matching one to the other is the same category error the rule exists to prevent, so
+    the basket is SEARCHED for: `taken` is monotone in it, which makes a bisection exact and cheap.
+    Free either way: no model call, ~6 passes over pools already in memory.
+    """
+    target = max(1.0, taken)
+    cache: dict[int, ArmRow | None] = {}
+
+    def at(k: int) -> ArmRow | None:
+        if k not in cache:
+            rows = run_arm(
+                "embedder",
+                replace(pools, basket=k),
+                store=store,
+                key_of=key_of,
+                llm=llm,
+                settings=settings,
+                workers=workers,
+            )
+            cache[k] = next((r for r in rows if r.kind == "all"), None)
+        return cache[k]
+
+    lo, hi = 1, max(1, pools.fetch_n)
+    best: tuple[int, ArmRow] | None = None
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        row = at(mid)
+        if row is None:
+            break
+        if best is None or abs(row.taken - target) < abs(best[1].taken - target):
+            best = (mid, row)
+        if row.taken < target:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    if best is None:
+        return None
+    k, row = best
+    row.arm = f"embedder@{k}"
+    return row
 
 
 # --------------------------------------------------------------------------- the preflight
@@ -454,7 +582,7 @@ def estimate(
     out: list[Estimate] = []
     for arm in arms:
         mode, card, fill = ARMS[arm]
-        if not mode:  # the embedder arm spends nothing at all
+        if not mode:  # embedder / adaptive / conformal — scores only, nothing is generated
             out.append(Estimate(arm, 0, 0, 0))
             continue
         s = base.model_copy(update={"triage_mode": mode, "triage_card": card, "triage_fill": fill})

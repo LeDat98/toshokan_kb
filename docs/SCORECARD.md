@@ -371,6 +371,75 @@ Fixed in code — `evals/multihop_answer.run()` now forces `enable_answer_cache=
 trusts the caller to remember — with a regression test. Recorded as metric bug 6.9.
 *Older `eval-multihop` numbers in §3 predate the cache (D-062, 2026-07-20) and are unaffected.*
 
+### 2.7 The score-only frontier: what selecting WITHOUT reading is worth (D-071)
+
+`libkb probe-selection --arms embedder,adaptive,conformal` · MultiHop n=150 · window 50 · **0 LLM
+calls, 0 generation tokens** — free, so it needs no `--yes`. The sweep below is the same command
+varying `--basket` / `--buffer` / `--alpha`.
+
+Two published training-free selectors, built as arms because the size of the true-page set is not
+constant — TP is 2.75 documents and moves with the kind (comparison 2.25 · temporal 2.49 · inference
+3.46) while every selector measured so far commits to a near-constant 3.0–3.2:
+
+- **Adaptive-k** (arXiv 2506.08479) — cut the ranked list at its sharpest score drop, take `B` more.
+- **Conformal filtering** (arXiv 2511.17908) — calibrate one threshold so the kept set contains
+  **every** true page on at least (1−α) of queries. Adapted here: the nonconformity score is the
+  margin each query needed to keep **all** of its gold, so what is certified is `superset` itself,
+  not per-document recall. Cross-fitted over 5 folds — no query is scored under a threshold it
+  helped calibrate.
+
+**The conformal guarantee is exact, and that is the harness's correctness check.** The certificate
+is conditional on the pool containing TP (the 92.7% ceiling), so predicted absolute superset is
+(1−α)×0.927. Observed, at every level:
+
+| α | predicted | measured |
+|---|---|---|
+| 0.40 | 55.6% | **56.0%** |
+| 0.30 | 64.9% | **64.7%** |
+| 0.20 | 74.2% | **74.0%** |
+| 0.10 | 83.4% | **83.3%** |
+| 0.03 | 89.9% | **90.7%** |
+
+Every point within 0.8. (The same class of external check as BM25 0.235 vs BEIR's 0.236, §2.5.)
+
+**The frontier — superset against documents committed, all free:**
+
+| taken ≈ | embedder (fixed k) | adaptive-k | conformal | ctx tok |
+|---|---|---|---|---|
+| 3.2 | 21.3% | — | — | 4,374 |
+| 3.8 | 24.7% | 25.3% (B=0) | — | ~7,100 |
+| 5.4 | 38.0% | 40.0% (B=2) | — | ~9,200 |
+| 6.4 | 42.7% | 42.7% (B=3, at 6.0) | 37.3% (α=.6) | ~9,800 |
+| 11.1 | 61.3% | — | 64.7% (α=.3) | ~18–20k |
+| 15.8 | 78.0% | — | 83.3% (α=.1) | ~27–29k |
+| 22–24 | 92.7% (k=50, the ceiling) | — | 90.7% (α=.03) | 40–43k |
+
+**Verdict — both are NULL as selectors, and the reason is the finding.**
+Adaptive-k sits **on** the embedder curve (0 to +2 points at matched `taken`). Conformal is worth
+**+3 to +5** but only in the wide regime, and *below* the curve when tight. Neither is a mechanism
+for choosing better; both are mechanisms for choosing **more**.
+
+**What it settles, and this is worth the run on its own:** at the target `taken ≈ 4`, the best
+score-only selector reaches **~25–32% superset**. Reaching the 90% goal from scores alone costs
+**≈22 documents and ~40,000 ctx tokens** — nearly **7×** the ≲6,000 budget. *The 28 points still
+missing from the pool cannot be bought from the sieve's scores at any price we would pay.*
+
+**And the same frontier says the LLM selector is already far above it — which nothing had measured
+before.** Reading `set` / `rich` / `agent` (§2.6, same pool, same n) against the free curve at the
+**same** `taken`:
+
+| selector | superset | taken | free curve at that `taken` | the LLM's contribution |
+|---|---|---|---|---|
+| `set` | 42.7% | 3.0 | ~20% | **+23** |
+| `agent` | 36.7% | 3.2 | ~21% | **+16** |
+| `rich` | 64.7% | 7.0 | ~45% | **+20** |
+
+So the selection layer is **not** the weak component; it is worth roughly **+20 points of superset
+at any basket size**, and `set` reaches 42.7% on 3,677 ctx tokens where the sieve needs 6.4
+documents and 9,795 tokens for the same number. **Reading beats scoring, and score-cleverness does
+not close the gap.** The remaining coverage has to be bought by reading — which retires the
+free-mechanism line and leaves the sufficiency gate (§8) as the only live direction.
+
 ---
 
 ## 3. The answer — accuracy, and the thing that matters more
